@@ -7,6 +7,8 @@ import std/options
 import std/times
 import ndb/sqlite
 
+import ponairi/pragmas
+
 type
   Pragma = object
     ## Represents a pragma attached to a field/table
@@ -64,15 +66,6 @@ func sqlType*[V](T: typedesc[Option[V]]): string {.inline.} = sqlType(V)
 # We store Time as UNIX time and DateTime in sqlites format (Both in utc)
 func sqlType*(T: typedesc[Time]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[DateTime]): string {.inline.} = "TEXT"
-
-template primary*() {.pragma.}
-  ## Make the column be a primary key
-template autoIncrement*() {.pragma.}
-  ## Make the column auto increment
-template references*(column: untyped) {.pragma.}
-  ## Specify the column that the field references
-template cascade*() {.pragma.}
-  ## Turns on cascade deletion for a foreign key reference
 
 using db: DbConn
 using args: varargs[DbValue, dbValue]
@@ -412,4 +405,5 @@ proc exists*[T: object](db; item: T): bool =
     params &= dbValue(field)
   result = db.getValue[:int64](stmt, params).unsafeGet() == 1
 
+export pragmas
 export sqlite
