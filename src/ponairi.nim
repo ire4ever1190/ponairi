@@ -1,9 +1,10 @@
-import macros
-import strformat
-import parseutils
-import macrocache
-import strutils
-import options
+import std/macros
+import std/strformat
+import std/parseutils
+import std/macrocache
+import std/strutils
+import std/options
+import std/times
 import ndb/sqlite
 
 type
@@ -19,6 +20,7 @@ type
     # I don't think a person will have too many pragmas so a seq should be fine for now
     pragmas: seq[Pragma]
 
+const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
 
 func initPragma(pragmaVal: NimNode): Pragma =
   ## Creates a pragma object from nnkPragmaExpr node
@@ -58,7 +60,9 @@ func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
 func sqlType*(T: typedesc[SomeInteger]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[bool]): string {.inline.} = "BOOL"
 func sqlType*[V](T: typedesc[Option[V]]): string {.inline.} = sqlType(V)
-
+# We store Time as UNIX time and DateTime in sqlites format (Both in utc)
+func sqlType*(T: typedesc[Time]): string {.inline.} = "INTEGER"
+func sqlType*(T: typedesc[DateTime]): string {.inline.} = "TEXT"
 
 template primary*() {.pragma.}
   ## Make the column be a primary key
@@ -289,6 +293,12 @@ proc drop*[T: object](db; table: typedesc[T]) =
 proc dbValue*(b: bool): DbValue =
   result = DbValue(kind: dvkInt, i: if b: 1 else: 0)
 
+proc dbValue*(d: DateTime): DbValue =
+  result = DbValue(kind: dvkString, s: d.utc.format(dateFormat))
+
+proc dbValue*(t: Time): DbValue =
+  result = DbValue(kind: dvkInt, i: t.toUnix())
+
 func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeInteger](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
 func to*[T](src: DbValue, dest: var Option[T]) =
@@ -297,8 +307,10 @@ func to*[T](src: DbValue, dest: var Option[T]) =
     src.to(val)
     dest = some val
 func to*(src: DbValue, dest: var bool) {.inline.} = dest = src.i == 1
+func to*(src: DbValue, dest: var Time) {.inline.} = dest = src.i.fromUnix()
+proc to*(src: DbValue, dest: var DateTime) {.inline.} = dest = src.s.parse(dateFormat, utc())
 
-func to*[T: object | tuple](row: Row, dest: var T) =
+proc to*[T: object | tuple](row: Row, dest: var T) =
   var i = 0
   for field, value in dest.fieldPairs:
     row[i].to(value)

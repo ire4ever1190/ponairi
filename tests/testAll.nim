@@ -3,7 +3,7 @@ import std/[
   options,
   sequtils
 ]
-import ponairi
+import ponairi {.all.}
 
 type
   Person = object
@@ -17,7 +17,7 @@ type
     owner {.references(Person.name), cascade.}: string
 
 
-let db = newConn(":memory")
+let db = newConn(":memory:")
 
 test "Table creation":
   db.create(Person)
@@ -103,7 +103,23 @@ test "Cascade deletion":
   db.insert(jake)
   db.insert(jakesDogs)
 
+import std/times
+type
+  Exercise = object
+    # I know this doesn't make any sense
+    time: Time
+    date: DateTime
+db.create(Exercise)
+test "Store times":
+  var now = now()
+  # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
+  # or else they won't compare properly
+  now = dateTime(now.year, now.month, now.monthday, now.hour, now.minute, now.second)
+  let currTime = getTime().toUnix().fromUnix()
 
+  let exercise = Exercise(time: currTime, date: now)
+  db.insert(exercise)
 
+  check db.find(seq[Exercise]).toSeq()[0] == exercise
 
 close db
