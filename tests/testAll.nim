@@ -108,14 +108,15 @@ test "Cascade deletion":
   db.insert(jakesDogs)
 
 import std/times
-type
-  Exercise = object
-    # I know this doesn't make any sense
-    time: Time
-    date: DateTime
-
-db.create(Exercise)
 test "Store times":
+  type
+    Exercise = object
+      # I know this doesn't make any sense
+      time: Time
+      date: DateTime
+  db.create(Exercise)
+  defer: db.drop(Exercise)
+
   var now = now()
   # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
   # or else they won't compare properly
@@ -126,5 +127,18 @@ test "Store times":
   db.insert(exercise)
 
   check db.find(seq[Exercise]).toSeq()[0] == exercise
+
+test "Exists without primary key":
+  type
+    Basic = object
+      a: string
+      b: int
+  db.create(Basic)
+  defer: db.drop(Basic)
+
+  let item = Basic(a: "foo", b: 9)
+  check not db.exists(item)
+  db.insert(item)
+  check db.exists(item)
 
 close db

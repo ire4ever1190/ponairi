@@ -292,7 +292,7 @@ proc create*[T: object](db; table: typedesc[T]) =
 
 proc drop*[T: object](db; table: typedesc[T]) =
   ## Drops a table from the database
-  const stmt = "DROP TABLE IF EXISTS " & $T
+  const stmt = sql("DROP TABLE IF EXISTS " & $T)
   db.exec(stmt)
 
 proc dbValue*(b: bool): DbValue =
@@ -364,7 +364,7 @@ iterator find*[T: object | tuple](db; table: typedesc[seq[T]]): T =
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
 
-macro createUniqueWhere[T: object](table: typedesc[T], ): string =
+macro createUniqueWhere[T: object](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in
   ## the table. If there are any primary keys, it will only use those in the WHERE clause.
   ## if there are no primary keys, they it will check every field
@@ -385,25 +385,35 @@ macro createUniqueWhere[T: object](table: typedesc[T], ): string =
   # If there are some primary keys they we will only use those for the where clause.
   # Else we will use every other column
   # TODO: Actually use primary keys
-  result = newLit (columns).join(" AND ")
+  let usePrimary = primaryKeys.len > 0
+  result = newLit (if usePrimary: primaryKeys else: columns).join(" AND ")
+  result = nnkTupleConstr.newTree(newLit usePrimary, result)
+
+template queryWithWhere(query: static[string], call: untyped): untyped =
+  ## Replaces :where in **query** with a where clause that uniquely
+  ## identifies a single item in the table
+  ## Runs **call** with db, stmt, and params as parameters
+  bind replace
+  bind hasCustomPragma
+  const
+    (usePrimary, whereClause) = createUniqueWhere(T)
+    stmt = query.replace(":where", whereClause).sql
+  var params: seq[DbValue]
+  for name, field in item.fieldPairs:
+    when not usePrimary or field.hasCustomPragma(primary):
+      params &= dbValue(field)
+  # Having this call is just a hack, for some reason stmt wasn't made available in scope of where it was called
+  call(db, stmt, params)
 
 proc delete*[T: object](db; item: T) =
   ## Tries to delete item from table. Does nothing if it doesn't exist
-  const stmt = sql(fmt"DELETE FROM {$T} WHERE " & createUniqueWhere(T))
-  var params: seq[DbValue]
-  for name, field in item.fieldPairs:
-    params &= dbValue(field)
-  db.exec(stmt, params)
+  queryWithWhere(fmt"DELETE FROM {$T} WHERE :where", exec)
 
 proc exists*[T: object](db; item: T): bool =
   ## Returns true if item already exists in the database
-  const
-    whereClause = createUniqueWhere(T)
-    stmt = sql(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE {whereClause} LIMIT 1)")
-  var params: seq[DbValue]
-  for name, field in item.fieldPairs:
-    params &= dbValue(field)
-  result = db.getValue[:int64](stmt, params).unsafeGet() == 1
+  queryWithWhere(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE :where LIMIT 1)", getValue[int64]).unsafeGet() == 1
 
+export hasCustomPragma # Wouldn't bind
+export replace
 export pragmas
 export sqlite
