@@ -118,16 +118,28 @@ template transaction(db; body: untyped) =
     db.rollback()
     raise
 
+proc getName(n: NimNode): string =
+  case n.kind
+  of nnkIdent, nnkSym:
+    result = n.strVal
+  of nnkPostFix:
+    result = n[1].getName()
+  of nnkTypeDef:
+    result = n[0].getName()
+  else:
+    echo n.treeRepr
+    assert false, "Name is invalid"
+
 proc getProperties(impl: NimNode): seq[Property] =
   for identDef in impl[2][2]:
     for property in identDef[0 ..< ^2]:
       var newProp = Property(typ: identDef[^2])
       if property.kind == nnkPragmaExpr:
-        newProp.name = property[0].strVal
+        newProp.name = property[0].getName
         for pragma in property[1]:
           newProp.pragmas &= initPragma(pragma)
       else:
-        newProp.name = $property
+        newProp.name = property.getName
       result &= newProp
 
 proc lookupImpl(T: NimNode): NimNode =
@@ -150,11 +162,10 @@ proc lookupImpl(T: NimNode): NimNode =
       echo result.treeRepr
       "Beans misconfigured: Could not look up type".error(T)
 
-
 macro createSchema(T: typedesc[object]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
-  result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl[0].strVal} (")
+  result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
   let properties = impl.getProperties()
   # Keep list of primary keys so that we can generate them last.
   # This enables composite primary keys
@@ -201,7 +212,7 @@ macro createSchema(T: typedesc[object]): SqlQuery =
 macro createInsert[T: object](table: typedesc[T]): SqlQuery =
   ## Returns a string that can be used to insert an object into the database
   let impl = table.lookupImpl()
-  result = newLit(fmt"INSERT INTO {$impl[0]} (")
+  result = newLit(fmt"INSERT INTO {impl.getName()} (")
   let properties = impl.getProperties()
   var
     columns = ""
@@ -231,7 +242,7 @@ macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
     else:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
   if conflicts.len == 0:
-    fmt"Upsert doesn't work on {impl[0].strVal} since it has no primary keys".error(table)
+    fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(" ,")}"""
   result = sqlLit(result)
 
@@ -332,7 +343,7 @@ macro load*[C: object](db; child: C, field: untyped): object =
         column = reference.getColumn()
       let query = fmt"SELECT * FROM {table} WHERE {column} = ?"
       return newCall("find", db, ident table, newCall("sql", newLit query), nnkDotExpr.newTree(child, field))
-  fmt"{field} is not a property of {impl[0]}".error(field)
+  fmt"{field} is not a property of {impl.getName()}".error(field)
 
 proc find*[T: object | tuple](db; table: typedesc[T], query: SqlQuery, args): T =
   ## Returns first row that matches **query**

@@ -9,12 +9,12 @@ type
   Person = object
     name {.primary.}: string
     age: int
-    alive: bool
+    alive*: bool
     extraInfo: Option[string]
 
-  Dog = object
+  Dog* = object
     name {.primary.}: string
-    owner {.references(Person.name), cascade.}: string
+    owner* {.references(Person.name), cascade.}: string
 
 
 let db = newConn(":memory:")
