@@ -16,12 +16,16 @@ type
     name {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
 
+  Something* = object
+    name*, age*: string
+    another {.references: Person.name, cascade.}: string
 
 let db = newConn(":memory:")
 
 test "Table creation":
   db.create(Person)
   db.create(Dog)
+  db.create(Something)
 
 const
   jake = Person(name: "Jake", age: 42, alive: true)
@@ -109,6 +113,7 @@ type
     # I know this doesn't make any sense
     time: Time
     date: DateTime
+
 db.create(Exercise)
 test "Store times":
   var now = now()

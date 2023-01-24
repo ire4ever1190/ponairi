@@ -24,7 +24,8 @@ const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
 
 func initPragma(pragmaVal: NimNode): Pragma =
   ## Creates a pragma object from nnkPragmaExpr node
-  if pragmaVal.kind == nnkCall:
+  case pragmaVal.kind
+  of nnkCall, nnkExprColonExpr:
     result.name = pragmaVal[0].strVal
     for parameter in pragmaVal[1..^1]:
       result.parameters &= parameter
