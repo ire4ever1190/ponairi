@@ -279,8 +279,8 @@ proc upsert*[T: object](db; item: T) =
 proc upsert*[T: object](db; items: openArray[T]) =
   ## Upsets a list of items into the database
   ##
-  ## - See [upsert(DbConn, T)]
-  ## - See [insert(DbConn, openArray[T])]
+  ## - See [upsert(db, item)]
+  ## - See [insert(db, items)]
   db.transaction:
     for item in items:
       db.upsert item
