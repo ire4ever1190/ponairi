@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    branches:
+      - "master"
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nim: ['1.6.0', 'stable', 'devel']
+
+    name: Nim ${{ matrix.nim }}
+    steps:
+
+    - name: Setup Nim Enviroment
+      uses: actions/checkout@v3
+
+    - uses: jiro4989/setup-nim-action@v1
+      with:
+          nim-version: ${{ matrix.nim }}
+
+    - name: Cache choosenim
+      id: cache-choosenim
+      uses: actions/cache@v1
+      with:
+        path: ~/.nimble
+        key: nimble-${{ hashFiles('*.nimble') }}
+
+    - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
+      name: Install nim dependencies
+      continue-on-error: true
+      run: nimble update && nimble install
+
+    - name: Run Tests
+      run: nimble test
+
+    - name: Test doc examples
+      run: nimble doc --warningAsError:BrokenLink:on --project src/ponairi.nim
