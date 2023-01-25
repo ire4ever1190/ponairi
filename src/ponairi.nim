@@ -9,6 +9,153 @@ import ndb/sqlite
 
 import ponairi/pragmas
 
+##[
+Pónairí can be used when all you need is a simple ORM for CRUD tasks.
+
+ - **C**reate: [insert] can be used for insertion
+ - **R**ead: [find] is used with a type based API to perform selections on your data
+ - **U**pdate: [upsert] will either insert or update your data
+ - **D**elete: [delete] does what it says on the tin, deletes
+
+Currently there is not support for auto migrations and so you'll need to perform those yourself
+if modifying the schema
+
+## Getting started
+
+After installing the library through nimble (or any other means) you'll want to open a connection with [newConn] which will be used
+for all interactions with the database.
+While this library does just use the connection object from [ndb](https://github.com/xzfc/ndb.nim), it is best to use
+this since it configures certain settings to make things like foreign keys work correctly
+
+```nim
+let db = newConn(":memory:") # Or pass a path to a file
+```
+
+After that your first step will be creating your schema through objects and then using [create] to build them in the database
+
+```nim
+type
+  # Create your objects like any other object.
+  # You then use pragmas to control aspects of the columns
+  Person = object
+    name {.primary.}: string
+    age: int
+
+  Item = object
+    ## An item is just something owned by a person
+    id {.autoIncrement, primary.}: int
+    name: string
+    # Add a one-to-many relation (one person owns many objects)
+    owner {.references: Person.name.}: string
+
+# We can also run db.drop(Type) if we want to drop a table
+db.create(Person)
+db.create(Item)
+```
+
+Now you'll probably want to start doing some CRUD tasks which is very easy to do
+
+#### Create
+
+Just call [insert] with an object of your choice
+
+```nim
+db.insert(Person(name: "Jake", age: 42))
+```
+
+#### Read
+
+[find] is used for all operations relating to getting objects from a database.
+It uses a type based API where the first parameter (after the db connection) determines the return type.
+Currently most tasks require you to write SQL yourself but this will hopefully change in the future
+
+```nim
+# Gets the Object we created before
+assert db.find(Person, sql"SELECT * FROM Person WHERE name = 'Jake'").age == 42
+
+# We can use Option[T] to handle when a query might not return a value
+# It would return an exception otherwise
+import std/options
+assert db.find(Option[Person], sql"SELECT * FROM Person WHERE name = 'John Doe'").isNone
+
+# We can use seq[T] to return all rows that match the query
+for person in db.find(seq[Person], sql"SELECT * FROM Person WHERE age > 1"):
+  echo person
+# This can also be used to get every row in a table
+for person in db.find(seq[Person]):
+  echo person
+```
+
+#### Update
+
+Updating is done with the [upsert] proc. This only works for tables with primary keys since it needs
+to be able to find the old object to be able to update it. If object doesn't exist then this acts
+like a normal insert
+
+```nim
+# Lets use the person we had before, but make them travel back in time
+let newPerson = Person(name: "Jake", age: 25)
+db.upsert(newPerson)
+```
+
+#### Delete
+
+Deleting is done via [delete] and requires passing the object that should be deleted.
+It finds the row to delete by either matching the primary keys or comparing all the values (If there is no primary keys defined)
+
+```nim
+db.delete(Person(name: "Jake"))
+```
+
+## Custom types
+
+Custom types can be added by implementing three functions
+
+- [sqlType]: Returns a string that will be the type to use in the SQL table
+- [dbValue]: For converting from the type to a value the database can read (See [ndb DbValue](https://xzfc.github.io/ndb.nim/v0.19.8/sqlite.html#DbValue))
+- [to]: For converting from the database value back to the Nim type
+
+Here is an example of implementing these for [SecureHash](https://nim-lang.org/docs/sha1.html#SecureHash).
+This code isn't very performant (performs unneeded copies) but is more of an example
+]##
+
+runnableExamples:
+  import std/sha1
+
+  # Its just an array of bytes so blob is the best storage type
+  proc sqlType(t: typedesc[SecureHash]): string = "BLOB"
+
+  proc dbValue(s: SecureHash): DbValue =
+    # We need to convert it into a blob for the database
+    # SHA1 hashes are 20 bytes in length
+    var blob = newString(20)
+    for i in 0..<20:
+      blob[i] = char(Sha1Digest(s)[i])
+    DbValue(kind: dvkBlob, b: DbBlob(blob))
+
+  proc to(src: DbValue, dest: var SecureHash) =
+    for i in 0..<20:
+      Sha1Digest(dest)[i] = uint8(string(src.b)[i])
+
+  type
+    User = object
+      # Usually you would add some salt and pepper and use a more cryptographic hash.
+      # But once again, this is an example
+      username {.primary.}: string
+      password: SecureHash
+
+  let db = newConn(":memory:")
+  db.create(User)
+
+  let user = User(
+    username: "coolDude",
+    password: secureHash("laptop")
+  )
+  # We will now show that we can send the user to the DB and get the same values back
+  db.insert user
+  assert db.find(User, sql"SELECT * FROM User") == user
+#==#
+
 type
   Pragma = object
     ## Represents a pragma attached to a field/table
@@ -254,6 +401,7 @@ proc insert*[T: object](db; item: T) =
   db.exec(query, params)
 
 proc insertID*[T: object](db; item: T): int64 =
+  ## Inserts an object and returns the auto generated ID
   insertImpl()
   db.insertID(query, params)
 
@@ -323,6 +471,27 @@ proc to*[T: object | tuple](row: Row, dest: var T) =
 
 macro load*[C: object](db; child: C, field: untyped): object =
   ## Loads parent from child using field
+  runnableExamples:
+    let db = newConn(":memory:")
+
+    type
+      User = object
+        id {.primary, autoIncrement.}: int64
+        name: string
+      Item = object
+        id {.primary, autoIncrement.}: int64
+        owner {.references: User.id.}: int64
+        name: string
+
+    db.create(User)
+    db.create(Item)
+    let
+      ownerID = db.insertID(User(name: "Jake"))
+      item = Item(owner: ownerID, name: "Lamp")
+    db.insert(item)
+    # We can now load the parent object that is referenced in the owner field
+    assert db.load(item, owner).name == "Jake"
+  #==#
   if field.kind != nnkIdent:
     "Field must just be the property of the child object that contains the relation".error(field)
   let impl = child.lookupImpl()
