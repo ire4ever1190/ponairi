@@ -2,6 +2,8 @@
 
 Simple ORM to handle basic CRUD tasks. Future plans are to expand the query generation to make needing to write SQL less common
 
+[Docs here](https://tempdocs.netlify.app/ponairi/stable/ponairi.html)
+
 ### Create
 
 To start you want to create your objects that will define your schema
