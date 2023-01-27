@@ -434,8 +434,26 @@ proc upsert*[T: object](db; items: openArray[T]) =
 
 proc create*[T: object](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
+  runnableExamples:
+    let db = newConn(":memory:")
+    # Create object
+    type Something = object
+      foo, bar: int
+    # Use `create` to make a table named 'something' with field reflecting`Something`
+    db.create Something
+  #==#
   const schema = createSchema(T)
   db.exec(schema)
+
+macro create*(db; tables: varargs[typed]) =
+  ## Creates multiple classes at once
+  ##
+  ## - See [create(db, table)]
+  result = newStmtList()
+  for table in tables:
+    if table.kind != nnkSym:
+      "Only type names should be passed".error(tables)
+    result &= nnkCall.newTree(ident"create", db, table)
 
 proc drop*[T: object](db; table: typedesc[T]) =
   ## Drops a table from the database

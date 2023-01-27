@@ -23,9 +23,7 @@ type
 let db = newConn(":memory:")
 
 test "Table creation":
-  db.create(Person)
-  db.create(Dog)
-  db.create(Something)
+  db.create(Person, Dog, Something)
 
 const
   jake = Person(name: "Jake", age: 42, alive: true)
