@@ -1,6 +1,5 @@
 import std/macros
 import std/strformat
-import std/parseutils
 import std/macrocache
 import std/strutils
 import std/options
@@ -435,8 +434,26 @@ proc upsert*[T: object](db; items: openArray[T]) =
 
 proc create*[T: object](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
+  runnableExamples:
+    let db = newConn(":memory:")
+    # Create object
+    type Something = object
+      foo, bar: int
+    # Use `create` to make a table named 'something' with field reflecting`Something`
+    db.create Something
+  #==#
   const schema = createSchema(T)
   db.exec(schema)
+
+macro create*(db; tables: varargs[typed]) =
+  ## Creates multiple classes at once
+  ##
+  ## - See [create(db, table)]
+  result = newStmtList()
+  for table in tables:
+    if table.kind != nnkSym:
+      "Only type names should be passed".error(tables)
+    result &= nnkCall.newTree(ident"create", db, table)
 
 proc drop*[T: object](db; table: typedesc[T]) =
   ## Drops a table from the database
@@ -483,8 +500,8 @@ macro load*[C: object](db; child: C, field: untyped): object =
         owner {.references: User.id.}: int64
         name: string
 
-    db.create(User)
-    db.create(Item)
+    db.create(User, Item)
+
     let
       ownerID = db.insertID(User(name: "Jake"))
       item = Item(owner: ownerID, name: "Lamp")
@@ -528,10 +545,18 @@ iterator find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, 
     row.to(res)
     yield res
 
-iterator find*[T: object | tuple](db; table: typedesc[seq[T]]): T =
+iterator find*[T: object](db; table: typedesc[seq[T]]): T =
   ## Returns all rows that belong to **table**
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
+
+proc find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
+  for row in db.find(table, query, args):
+    result &= row
+
+proc find*[T: object](db; table: typedesc[seq[T]]): seq[T] =
+  for row in db.find(table):
+    result &= row
 
 macro createUniqueWhere[T: object](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in

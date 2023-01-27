@@ -1,7 +1,6 @@
 import std/[
   unittest,
-  options,
-  sequtils
+  options
 ]
 import ponairi {.all.}
 
@@ -20,12 +19,11 @@ type
     name*, age*: string
     another {.references: Person.name, cascade.}: string
 
+
 let db = newConn(":memory:")
 
 test "Table creation":
-  db.create(Person)
-  db.create(Dog)
-  db.create(Something)
+  db.create(Person, Dog, Something)
 
 const
   jake = Person(name: "Jake", age: 42, alive: true)
@@ -53,18 +51,18 @@ test "Try find":
   check db.find(Option[Person], sql"SELECT * FROM Person").isSome()
 
 test "Find all":
-  check db.find(seq[Person]).toSeq().len == 2
+  check db.find(seq[Person]).len == 2
 
 test "Insert with relation":
   db.insert(jakesDogs)
 
 test "Find with relation":
-  let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'").toSeq()
+  let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'")
   check dogs == jakesDogs
 
 when false:
   test "Auto find with relation":
-    check jakesDogs == db.findAllFor(Dog, Person).toSeq()
+    check jakesDogs == db.findAllFor(Dog, Person)
 
 test "Load parent in relation":
   let dog = jakesDogs[0]
@@ -74,13 +72,13 @@ test "Upsert":
   let oldVal = jakesDogs[0]
   var dog = jakesDogs[0]
   dog.name = "Soemthing else"
-  check dog notin db.find(seq[Dog]).toSeq()
+  check dog notin db.find(seq[Dog])
   db.upsert(dog)
-  check dog in db.find(seq[Dog]).toSeq()
+  check dog in db.find(seq[Dog])
   db.upsert(oldVal)
 
 test "Finding to tuples":
-  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ").toSeq
+  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
   for row in pairs:
     check row.owner == "Jake"
     check row.dog != ""
@@ -88,7 +86,7 @@ test "Finding to tuples":
 test "Delete item":
   let dog = jakesDogs[0]
   db.delete(dog)
-  check dog notin db.find(seq[Dog]).toSeq()
+  check dog notin db.find(seq[Dog])
   db.insert(dog)
 
 test "Exists":
@@ -126,7 +124,7 @@ test "Store times":
   let exercise = Exercise(time: currTime, date: now)
   db.insert(exercise)
 
-  check db.find(seq[Exercise]).toSeq()[0] == exercise
+  check db.find(seq[Exercise])[0] == exercise
 
 test "Exists without primary key":
   type
