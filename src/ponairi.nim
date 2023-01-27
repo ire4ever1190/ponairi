@@ -1,6 +1,5 @@
 import std/macros
 import std/strformat
-import std/parseutils
 import std/macrocache
 import std/strutils
 import std/options
@@ -528,10 +527,18 @@ iterator find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, 
     row.to(res)
     yield res
 
-iterator find*[T: object | tuple](db; table: typedesc[seq[T]]): T =
+iterator find*[T: object](db; table: typedesc[seq[T]]): T =
   ## Returns all rows that belong to **table**
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
+
+proc find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
+  for row in db.find(table, query, args):
+    result &= row
+
+proc find*[T: object](db; table: typedesc[seq[T]]): seq[T] =
+  for row in db.find(table):
+    result &= row
 
 macro createUniqueWhere[T: object](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in
