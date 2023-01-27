@@ -23,8 +23,7 @@ type
 # Open connection to database, make sure to close connection when finished
 let db = newConn(":memory:")
 # Create the tables
-db.create(Customer)
-db.create(Order)
+db.create(Customer, Order)
 ```
 
 Now you can start inserting data

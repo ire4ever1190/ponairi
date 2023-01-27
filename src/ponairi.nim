@@ -500,8 +500,8 @@ macro load*[C: object](db; child: C, field: untyped): object =
         owner {.references: User.id.}: int64
         name: string
 
-    db.create(User)
-    db.create(Item)
+    db.create(User, Item)
+
     let
       ownerID = db.insertID(User(name: "Jake"))
       item = Item(owner: ownerID, name: "Lamp")
