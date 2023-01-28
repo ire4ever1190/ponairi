@@ -6,7 +6,10 @@ import std/options
 import std/times
 import ndb/sqlite
 
-import ponairi/pragmas
+import ponairi/[
+  pragmas,
+  queryBuilder
+]
 
 ##[
 Pónairí can be used when all you need is a simple ORM for CRUD tasks.
@@ -196,6 +199,7 @@ func contains(items: seq[Pragma], name: string): bool =
 func `[]`(items: seq[Pragma], name: string): Pragma =
   for item in items:
     if item.name.eqIdent(name): return item
+
 
 func isOptional(prop: Property): bool =
   ## Returns true if the property has an optional type
@@ -609,5 +613,6 @@ proc exists*[T: object](db; item: T): bool =
 
 export hasCustomPragma # Wouldn't bind
 export replace
+export queryBuilder
 export pragmas
 export sqlite

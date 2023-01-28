@@ -1,6 +1,7 @@
 import std/[
   unittest,
-  options
+  options,
+  times
 ]
 import ponairi {.all.}
 
@@ -20,14 +21,14 @@ type
     another {.references: Person.name, cascade.}: string
 
 
-let db = newConn(":memory:")
 
-test "Table creation":
-  db.create(Person, Dog, Something)
+
+
 
 const
   jake = Person(name: "Jake", age: 42, alive: true)
   john = Person(name: "John", age: 45, alive: false, extraInfo: some "Test")
+  people = [jake, john]
 
 const jakesDogs = [
   Dog(owner: "Jake", name: "Dog"),
@@ -36,107 +37,125 @@ const jakesDogs = [
   Dog(owner: "Jake", name: "something")
 ]
 
-test "Insert":
-  db.insert(jake)
+suite "Base API":
+  let db = newConn(":memory:")
 
-test "Insert ID":
-  check db.insertID(john) == 2
+  test "Table creation":
+    db.create(Person, Dog, Something)
 
-test "Find":
-  check db.find(Person, sql"SELECT * FROM Person WHERE name = 'Jake'") == jake
-  check db.find(Person, sql"SELECT * FROM Person WHERE name = 'John'") == john
+  test "Insert":
+    db.insert(jake)
 
-test "Try find":
-  check db.find(Option[Person], sql"SELECT * FROM Person WHERE name = 'John Doe'").isNone()
-  check db.find(Option[Person], sql"SELECT * FROM Person").isSome()
+  test "Insert ID":
+    check db.insertID(john) == 2
 
-test "Find all":
-  check db.find(seq[Person]).len == 2
+  test "Find":
+    check db.find(Person, sql"SELECT * FROM Person WHERE name = 'Jake'") == jake
+    check db.find(Person, sql"SELECT * FROM Person WHERE name = 'John'") == john
 
-test "Insert with relation":
-  db.insert(jakesDogs)
+  test "Try find":
+    check db.find(Option[Person], sql"SELECT * FROM Person WHERE name = 'John Doe'").isNone()
+    check db.find(Option[Person], sql"SELECT * FROM Person").isSome()
 
-test "Find with relation":
-  let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'")
-  check dogs == jakesDogs
+  test "Find all":
+    check db.find(seq[Person]).len == 2
 
-when false:
-  test "Auto find with relation":
-    check jakesDogs == db.findAllFor(Dog, Person)
+  test "Insert with relation":
+    db.insert(jakesDogs)
 
-test "Load parent in relation":
-  let dog = jakesDogs[0]
-  check db.load(dog, owner) == jake
+  test "Find with relation":
+    let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'")
+    check dogs == jakesDogs
 
-test "Upsert":
-  let oldVal = jakesDogs[0]
-  var dog = jakesDogs[0]
-  dog.name = "Soemthing else"
-  check dog notin db.find(seq[Dog])
-  db.upsert(dog)
-  check dog in db.find(seq[Dog])
-  db.upsert(oldVal)
+  when false:
+    test "Auto find with relation":
+      check jakesDogs == db.findAllFor(Dog, Person)
 
-test "Finding to tuples":
-  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
-  for row in pairs:
-    check row.owner == "Jake"
-    check row.dog != ""
+  test "Load parent in relation":
+    let dog = jakesDogs[0]
+    check db.load(dog, owner) == jake
 
-test "Delete item":
-  let dog = jakesDogs[0]
-  db.delete(dog)
-  check dog notin db.find(seq[Dog])
-  db.insert(dog)
+  test "Upsert":
+    let oldVal = jakesDogs[0]
+    var dog = jakesDogs[0]
+    dog.name = "Soemthing else"
+    check dog notin db.find(seq[Dog])
+    db.upsert(dog)
+    check dog in db.find(seq[Dog])
+    db.upsert(oldVal)
 
-test "Exists":
-  let dog = jakesDogs[0]
-  check db.exists(dog)
-  db.delete(dog)
-  check not db.exists(dog)
-  db.insert(dog)
+  test "Finding to tuples":
+    let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+    for row in pairs:
+      check row.owner == "Jake"
+      check row.dog != ""
 
-test "Cascade deletion":
-  db.delete(jake)
-  check not db.exists(jake)
-  check not db.exists(jake)
-  for dog in jakesDogs:
+  test "Delete item":
+    let dog = jakesDogs[0]
+    db.delete(dog)
+    check dog notin db.find(seq[Dog])
+    db.insert(dog)
+
+  test "Exists":
+    let dog = jakesDogs[0]
+    check db.exists(dog)
+    db.delete(dog)
     check not db.exists(dog)
-  db.insert(jake)
-  db.insert(jakesDogs)
+    db.insert(dog)
 
-import std/times
-test "Store times":
-  type
-    Exercise = object
-      # I know this doesn't make any sense
-      time: Time
-      date: DateTime
-  db.create(Exercise)
-  defer: db.drop(Exercise)
+  test "Cascade deletion":
+    db.delete(jake)
+    check not db.exists(jake)
+    check not db.exists(jake)
+    for dog in jakesDogs:
+      check not db.exists(dog)
+    db.insert(jake)
+    db.insert(jakesDogs)
 
-  var now = now()
-  # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
-  # or else they won't compare properly
-  now = dateTime(now.year, now.month, now.monthday, now.hour, now.minute, now.second)
-  let currTime = getTime().toUnix().fromUnix()
+  test "Store times":
+    type
+      Exercise = object
+        # I know this doesn't make any sense
+        time: Time
+        date: DateTime
+    db.create(Exercise)
+    defer: db.drop(Exercise)
 
-  let exercise = Exercise(time: currTime, date: now)
-  db.insert(exercise)
+    var now = now()
+    # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
+    # or else they won't compare properly
+    now = dateTime(now.year, now.month, now.monthday, now.hour, now.minute, now.second)
+    let currTime = getTime().toUnix().fromUnix()
 
-  check db.find(seq[Exercise])[0] == exercise
+    let exercise = Exercise(time: currTime, date: now)
+    db.insert(exercise)
 
-test "Exists without primary key":
-  type
-    Basic = object
-      a: string
-      b: int
-  db.create(Basic)
-  defer: db.drop(Basic)
+    check db.find(seq[Exercise])[0] == exercise
 
-  let item = Basic(a: "foo", b: 9)
-  check not db.exists(item)
-  db.insert(item)
-  check db.exists(item)
+  test "Exists without primary key":
+    type
+      Basic = object
+        a: string
+        b: int
+    db.create(Basic)
+    defer: db.drop(Basic)
 
-close db
+    let item = Basic(a: "foo", b: 9)
+    check not db.exists(item)
+    db.insert(item)
+    check db.exists(item)
+  close db
+
+suite "Query builder":
+  let db = newConn(":memory:")
+  db.create(Person)
+  db.insert(people)
+  test "Find one":
+    check db.find(Person.where(name == "Jake")) == jake
+
+  test "Find multiple":
+    check db.find(seq[Person].where(age > 40)) == @people
+
+  test "Exists":
+    check db.exists(Person.where(name == "Jake"))
+    check not db.exists(Person.where(age < 10))
