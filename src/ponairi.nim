@@ -368,7 +368,7 @@ macro createInsert[T: object](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
+macro createUpsert[T: object](table: typedesc[T], exclude: static[openArray[string]]): SqlQuery =
   ## Returns a string that can be used to insert or update an object into the database
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
@@ -379,11 +379,11 @@ macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
-    else:
+    elif property.name notin exclude:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
-  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(" ,")}"""
+  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
 template insertImpl() =
@@ -412,25 +412,27 @@ proc insert*[T: object](db; items: openArray[T]) =
     for item in items:
       db.insert item
 
-proc upsert*[T: object](db; item: T) =
+proc upsert*[T: object](db; item: T, exclude: static[openArray[string]] = []) =
   ## Trys to insert an item into the database. If it conflicts with an
   ## existing item then it insteads updates the values to reflect item.
   ##
+  ## If you don't want fields to be excluded then you can pass a list of fields to exclude in
+  ##
   ## .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
-  const query = createUpsert(T)
+  const query = createUpsert(T, exclude)
   var params: seq[DbValue]
   for name, field in item.fieldPairs:
     params &= dbValue(field)
   db.exec(query, params)
 
-proc upsert*[T: object](db; items: openArray[T]) =
+proc upsert*[T: object](db; items: openArray[T], exclude: static[openArray[string]] = []) =
   ## Upsets a list of items into the database
   ##
   ## - See [upsert(db, item)]
   ## - See [insert(db, items)]
   db.transaction:
     for item in items:
-      db.upsert item
+      db.upsert(item, exclude)
 
 proc create*[T: object](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object

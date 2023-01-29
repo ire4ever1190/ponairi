@@ -77,6 +77,13 @@ test "Upsert":
   check dog in db.find(seq[Dog])
   db.upsert(oldVal)
 
+test "Upsert can ignore fields":
+  let oldVal = jake
+  var person = jake
+  person.age = int.high
+  db.upsert(person, ["age"])
+  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
+
 test "Finding to tuples":
   let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
   for row in pairs:
