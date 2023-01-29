@@ -148,8 +148,10 @@ suite "Base API":
 
 suite "Query builder":
   let db = newConn(":memory:")
-  db.create(Person)
+  db.create(Person, Dog)
   db.insert(people)
+  db.insert(jakesDogs)
+
   test "Find one":
     check db.find(Person.where(name == "Jake")) == jake
 
@@ -159,3 +161,4 @@ suite "Query builder":
   test "Exists":
     check db.exists(Person.where(name == "Jake"))
     check not db.exists(Person.where(age < 10))
+

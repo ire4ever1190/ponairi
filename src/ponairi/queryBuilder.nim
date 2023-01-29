@@ -38,6 +38,10 @@ proc generateExpr(x: NimNode): string =
     result = fmt"'{x.strVal}'"
   of nnkIntLit:
     result = $x.intVal
+  of nnkCall:
+    result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
+  of nnkDotExpr:
+    result = fmt"{x[0]}.{x[1]}"
   else:
     echo x.kind
     "Invalid SQL query".error(x)
@@ -48,9 +52,14 @@ func tableName[T](x: typedesc[T]): string =
 func tableName[T](x: typedesc[seq[T]]): string =
   result = $T
 
+func sqlExists[T](q: static[TableQuery[T]]): string =
+  const table = T.tableName
+  result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+
 macro where*[T](table: typedesc[T], query: untyped, variables: varargs[typed]): TableQuery[T] =
   let whereClause =  query.generateExpr()
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newLit whereClause)
+  echo whereClause
+  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(ident"fmt", newLit whereClause))
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =
   const
@@ -63,3 +72,9 @@ proc exists*[T](db; q: static[TableQuery[T]], args): bool =
     table = T.tableName
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
   db.getValue[:int64](query).unsafeGet() == 1
+
+type
+  Show = object
+  Episode = object
+
+echo Show.where(exists(Episode.where(show == show.id and status == 0))).string
