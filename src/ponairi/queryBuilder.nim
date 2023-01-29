@@ -78,3 +78,4 @@ type
   Episode = object
 
 echo Show.where(exists(Episode.where(show == show.id and status == 0))).string
+echo Show.where(episode.id in [1, 2, 3])
