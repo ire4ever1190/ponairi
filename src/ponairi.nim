@@ -8,7 +8,8 @@ import ndb/sqlite
 
 import ponairi/[
   pragmas,
-  queryBuilder
+  queryBuilder,
+  macroUtils
 ]
 
 ##[
@@ -158,56 +159,10 @@ runnableExamples:
   assert db.find(User, sql"SELECT * FROM User") == user
 #==#
 
-type
-  Pragma = object
-    ## Represents a pragma attached to a field/table
-    name: string
-    parameters: seq[NimNode]
 
-  Property = object
-    ## Represents a property of an object
-    name: string
-    typ: NimNode
-    # I don't think a person will have too many pragmas so a seq should be fine for now
-    pragmas: seq[Pragma]
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
 
-func initPragma(pragmaVal: NimNode): Pragma =
-  ## Creates a pragma object from nnkPragmaExpr node
-  case pragmaVal.kind
-  of nnkCall, nnkExprColonExpr:
-    result.name = pragmaVal[0].strVal
-    for parameter in pragmaVal[1..^1]:
-      result.parameters &= parameter
-  else:
-    result.name = pragmaVal.strVal
-
-func getTable(pragma: Pragma): string =
-  ## Returns name of table for references pragma
-  pragma.parameters[0][0].strVal
-
-func getColumn(pragma: Pragma): string =
-  ## Returns name of column for references pragma
-  pragma.parameters[0][1].strVal
-
-# I know these operations are slow, but I want to make it work first
-func contains(items: seq[Pragma], name: string): bool =
-  for item in items:
-    if item.name.eqIdent(name): return true
-
-func `[]`(items: seq[Pragma], name: string): Pragma =
-  for item in items:
-    if item.name.eqIdent(name): return item
-
-
-func isOptional(prop: Property): bool =
-  ## Returns true if the property has an optional type
-  result = prop.typ.kind == nnkBracketExpr and prop.typ[0].eqIdent("Option")
-
-func isPrimary(prop: Property): bool =
-  ## Returns true if the property is a primary key
-  result = "primary" in prop.pragmas
 
 func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
 func sqlType*(T: typedesc[SomeInteger]): string {.inline.} = "INTEGER"
@@ -261,50 +216,6 @@ template transaction(db; body: untyped) =
   except CatchableError, Defect: # Should I catch Defect?
     db.rollback()
     raise
-
-proc getName(n: NimNode): string =
-  case n.kind
-  of nnkIdent, nnkSym:
-    result = n.strVal
-  of nnkPostFix:
-    result = n[1].getName()
-  of nnkTypeDef:
-    result = n[0].getName()
-  else:
-    echo n.treeRepr
-    assert false, "Name is invalid"
-
-proc getProperties(impl: NimNode): seq[Property] =
-  for identDef in impl[2][2]:
-    for property in identDef[0 ..< ^2]:
-      var newProp = Property(typ: identDef[^2])
-      if property.kind == nnkPragmaExpr:
-        newProp.name = property[0].getName
-        for pragma in property[1]:
-          newProp.pragmas &= initPragma(pragma)
-      else:
-        newProp.name = property.getName
-      result &= newProp
-
-proc lookupImpl(T: NimNode): NimNode =
-  ## Performs a series of magical lookups to get the original
-  ## type def of something
-  result = T
-  while result.kind != nnkTypeDef:
-    case result.kind
-    of nnkSym:
-      let impl = result.getImpl()
-      if impl.kind == nnkNilLit:
-        result = result.getTypeImpl()
-      else:
-        result = impl
-    of nnkBracketExpr:
-      result = result[1]
-    of nnkIdentDefs:
-      result = result[0].getTypeInst()
-    else:
-      echo result.treeRepr
-      "Beans misconfigured: Could not look up type".error(T)
 
 macro createSchema(T: typedesc[object]): SqlQuery =
   ## Returns a string that can be used to create a table in a database

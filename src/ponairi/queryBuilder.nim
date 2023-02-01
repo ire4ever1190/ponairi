@@ -3,7 +3,8 @@ import std/[
   macros,
   strformat,
   options,
-  typetraits
+  typetraits,
+  macrocache
 ]
 
 type TableQuery[T] = distinct string
@@ -11,6 +12,8 @@ type TableQuery[T] = distinct string
 
 using db: DbConn
 using args: varargs[DbValue, dbValue]
+
+
 
 proc generateExpr(x: NimNode): string =
   case x.kind
@@ -24,6 +27,8 @@ proc generateExpr(x: NimNode): string =
       result = fmt"({generateExpr(lhs)} = {generateExpr(rhs)})"
     of "and", "or", ">", "<", ">=", "<=", "!=":
       result = fmt"({generateExpr(lhs)} {op.strVal} {generateExpr(rhs)})"
+    of "in":
+      result = fmt"{generateExpr(lhs)} IN {generateExpr(rhs)}"
     else:
       fmt"{op} is not supported".error(op)
   of nnkIdent, nnkSym:
@@ -42,6 +47,13 @@ proc generateExpr(x: NimNode): string =
     result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
   of nnkDotExpr:
     result = fmt"{x[0]}.{x[1]}"
+  of nnkBracket:
+    result = "("
+    for i in 0..<x.len:
+      result &= generateExpr(x[i])
+      if i < x.len - 1:
+        result &= ", "
+    result &= ")"
   else:
     echo x.kind
     "Invalid SQL query".error(x)
@@ -55,6 +67,7 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func sqlExists[T](q: static[TableQuery[T]]): string =
   const table = T.tableName
   result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+
 
 macro where*[T](table: typedesc[T], query: untyped, variables: varargs[typed]): TableQuery[T] =
   let whereClause =  query.generateExpr()
@@ -77,5 +90,5 @@ type
   Show = object
   Episode = object
 
-echo Show.where(exists(Episode.where(show == show.id and status == 0))).string
-echo Show.where(episode.id in [1, 2, 3])
+echo Show.where(exists(Episode.where(show == Show.id and status == 0))).string
+echo Show.where(episode.id in [1, 2, 3]).string
