@@ -168,6 +168,9 @@ type
     # I don't think a person will have too many pragmas so a seq should be fine for now
     pragmas: seq[Pragma]
 
+  SomeTable* = ref[object] | object
+    ## Supported types for reprsenting table schema
+
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
 
 func initPragma(pragmaVal: NimNode): Pragma =
@@ -271,7 +274,8 @@ proc getName(n: NimNode): string =
     assert false, "Name is invalid"
 
 proc getProperties(impl: NimNode): seq[Property] =
-  for identDef in impl[2][2]:
+  let identDefs = if impl[2].kind == nnkRefTy: impl[2][0][2] else: impl[2][2]
+  for identDef in identDefs:
     for property in identDef[0 ..< ^2]:
       var newProp = Property(typ: identDef[^2])
       if property.kind == nnkPragmaExpr:
@@ -302,7 +306,9 @@ proc lookupImpl(T: NimNode): NimNode =
       echo result.treeRepr
       "Beans misconfigured: Could not look up type".error(T)
 
-macro createSchema(T: typedesc[object]): SqlQuery =
+template fieldPairs(x: ref object): untyped = fieldPairs(x[])
+
+macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
   result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
@@ -349,7 +355,7 @@ macro createSchema(T: typedesc[object]): SqlQuery =
   result.join ")"
   result = sqlLit(result)
 
-macro createInsert[T: object](table: typedesc[T]): SqlQuery =
+macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   ## Returns a string that can be used to insert an object into the database
   let impl = table.lookupImpl()
   result = newLit(fmt"INSERT INTO {impl.getName()} (")
@@ -368,7 +374,7 @@ macro createInsert[T: object](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
+macro createUpsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   ## Returns a string that can be used to insert or update an object into the database
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
@@ -394,17 +400,17 @@ template insertImpl() =
     when not field.hasCustomPragma(autoIncrement):
       params &= dbValue(field)
 
-proc insert*[T: object](db; item: T) =
+proc insert*[T: SomeTable](db; item: T) =
   ## Inserts an object into the database
   insertImpl()
   db.exec(query, params)
 
-proc insertID*[T: object](db; item: T): int64 =
+proc insertID*[T: SomeTable](db; item: T): int64 =
   ## Inserts an object and returns the auto generated ID
   insertImpl()
   db.insertID(query, params)
 
-proc insert*[T: object](db; items: openArray[T]) =
+proc insert*[T: SomeTable](db; items: openArray[T]) =
   ## Inserts the list of items into the database.
   ## This gets ran in a transaction so if an error happens then none
   ## of the items are saved to the database
@@ -412,7 +418,7 @@ proc insert*[T: object](db; items: openArray[T]) =
     for item in items:
       db.insert item
 
-proc upsert*[T: object](db; item: T) =
+proc upsert*[T: SomeTable](db; item: T) =
   ## Trys to insert an item into the database. If it conflicts with an
   ## existing item then it insteads updates the values to reflect item.
   ##
@@ -423,7 +429,7 @@ proc upsert*[T: object](db; item: T) =
     params &= dbValue(field)
   db.exec(query, params)
 
-proc upsert*[T: object](db; items: openArray[T]) =
+proc upsert*[T: SomeTable](db; items: openArray[T]) =
   ## Upsets a list of items into the database
   ##
   ## - See [upsert(db, item)]
@@ -432,7 +438,7 @@ proc upsert*[T: object](db; items: openArray[T]) =
     for item in items:
       db.upsert item
 
-proc create*[T: object](db; table: typedesc[T]) =
+proc create*[T: SomeTable](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
   runnableExamples:
     let db = newConn(":memory:")
@@ -476,20 +482,23 @@ func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
 func to*[T](src: DbValue, dest: var Option[T]) =
   if src.kind != dvkNull:
-    var val: T
+    when T is SomeTable:
+      var val = T()
+    else:
+      var val: T
     src.to(val)
     dest = some val
 func to*(src: DbValue, dest: var bool) {.inline.} = dest = src.i == 1
 func to*(src: DbValue, dest: var Time) {.inline.} = dest = src.i.fromUnix()
 proc to*(src: DbValue, dest: var DateTime) {.inline.} = dest = src.s.parse(dateFormat, utc())
 
-proc to*[T: object | tuple](row: Row, dest: var T) =
+proc to*[T: SomeTable | tuple](row: Row, dest: var T) =
   var i = 0
   for field, value in dest.fieldPairs:
     row[i].to(value)
     i += 1
 
-macro load*[C: object](db; child: C, field: untyped): object =
+macro load*[C: SomeTable](db; child: C, field: untyped): object =
   ## Loads parent from child using field
   runnableExamples:
     let db = newConn(":memory:")
@@ -528,13 +537,13 @@ macro load*[C: object](db; child: C, field: untyped): object =
       return newCall("find", db, ident table, newCall("sql", newLit query), nnkDotExpr.newTree(child, field))
   fmt"{field} is not a property of {impl.getName()}".error(field)
 
-proc find*[T: object | tuple](db; table: typedesc[T], query: SqlQuery, args): T =
+proc find*[T: SomeTable | tuple](db; table: typedesc[T], query: SqlQuery, args): T =
   ## Returns first row that matches **query**
   let row = db.getRow(query, args)
   doAssert row.isSome(), "Could not find row in database"
   row.unsafeGet().to(result)
 
-proc find*[T: object](db; table: typedesc[Option[T]], query: SqlQuery, args): Option[T] =
+proc find*[T: SomeTable](db; table: typedesc[Option[T]], query: SqlQuery, args): Option[T] =
   ## Returns first row that matches **query**. If nothing matches then it returns `none(T)`
   let row = db.getRow(query, args)
   if row.isSome:
@@ -542,26 +551,29 @@ proc find*[T: object](db; table: typedesc[Option[T]], query: SqlQuery, args): Op
     row.unsafeGet().to(res)
     result = some res
 
-iterator find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): T =
+iterator find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): T =
   for row in db.rows(query, args):
-    var res: T
+    when T is SomeTable:
+      var res = T()
+    else:
+      var res =  default(T)
     row.to(res)
     yield res
 
-iterator find*[T: object](db; table: typedesc[seq[T]]): T =
+iterator find*[T: SomeTable](db; table: typedesc[seq[T]]): T =
   ## Returns all rows that belong to **table**
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
 
-proc find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
+proc find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
   for row in db.find(table, query, args):
     result &= row
 
-proc find*[T: object](db; table: typedesc[seq[T]]): seq[T] =
+proc find*[T: SomeTable](db; table: typedesc[seq[T]]): seq[T] =
   for row in db.find(table):
     result &= row
 
-macro createUniqueWhere[T: object](table: typedesc[T]): (bool, string) =
+macro createUniqueWhere[T: SomeTable](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in
   ## the table. If there are any primary keys, it will only use those in the WHERE clause.
   ## if there are no primary keys, they it will check every field
@@ -602,11 +614,11 @@ template queryWithWhere(query: static[string], call: untyped): untyped =
   # Having this call is just a hack, for some reason stmt wasn't made available in scope of where it was called
   call(db, stmt, params)
 
-proc delete*[T: object](db; item: T) =
+proc delete*[T: SomeTable](db; item: T) =
   ## Tries to delete item from table. Does nothing if it doesn't exist
   queryWithWhere(fmt"DELETE FROM {$T} WHERE :where", exec)
 
-proc exists*[T: object](db; item: T): bool =
+proc exists*[T: SomeTable](db; item: T): bool =
   ## Returns true if item already exists in the database
   queryWithWhere(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE :where LIMIT 1)", getValue[int64]).unsafeGet() == 1
 
