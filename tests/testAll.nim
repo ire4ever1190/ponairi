@@ -31,6 +31,9 @@ func `$`(d: Dog): string =
   else:
     "nil"
 
+func `==`(a, b: Dog): bool =
+  a.name == b.name and a.owner == b.owner
+
 let db = newConn(":memory:")
 
 test "Table creation":

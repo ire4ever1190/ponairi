@@ -460,7 +460,7 @@ macro create*(db; tables: varargs[typed]) =
     if table.kind != nnkSym:
       "Only type names should be passed".error(tables)
     result &= nnkCall.newTree(ident"create", db, table)
-  echo result.treeRepr
+
 proc drop*[T: object](db; table: typedesc[T]) =
   ## Drops a table from the database
   const stmt = sql("DROP TABLE IF EXISTS " & $T)
