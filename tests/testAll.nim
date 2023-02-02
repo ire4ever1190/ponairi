@@ -168,3 +168,15 @@ suite "Query builder":
     check db.exists(Person.where(name == "Jake"))
     check not db.exists(Person.where(age < 10))
 
+  test "Inner SQL exists":
+    check db.exists(Person.where(
+      exists(Dog.where(owner == "Jake")))
+    )
+
+  test "Can't use property that doesn't exist":
+    check not compiles(Person.where(unknown == "test"))
+
+  test "Scope changes when directly accessing table":
+    check not compiles(Person.where(
+      exists(Dog.where(owner == Person.owner))
+    ))

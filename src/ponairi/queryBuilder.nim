@@ -7,15 +7,29 @@ import std/[
   macrocache
 ]
 
-type TableQuery[T] = distinct string
+import macroUtils
 
+##[
+  Query builder that can be used to make type safe queries.
+  This doesn't aim to replace SQL and so certain situations will still require you to write SQL.
+
+  It basically is just for writing **WHERE** clauses that get interpreted different depeneding on the function you pass them to e.g.
+  If you pass a [TableQuery] to [find] then it will return the row/rows that match the clause but if you pass it to delete then it deletes
+  any row that matches
+]##
+
+type TableQuery[T] = distinct string
 
 using db: DbConn
 using args: varargs[DbValue, dbValue]
 
 
 
-proc generateExpr(x: NimNode): string =
+proc generateExpr(x, currentTable: NimNode): string =
+  ## Implements the main bulk of converting Nim code to SQL
+  ##
+  ## **currentTable** is used for checking if the column the user is trying to access is available
+  template generateExpr(x: NimNode): string = generateExpr(x, currentTable)
   case x.kind
   of nnkInfix:
     let
@@ -32,6 +46,10 @@ proc generateExpr(x: NimNode): string =
     else:
       fmt"{op} is not supported".error(op)
   of nnkIdent, nnkSym:
+    if not currentTable.hasProperty(x):
+      fmt"{x} doesn't exist in {currentTable}".error(x)
+    else:
+      echo fmt"{x} exists in {currentTable}"
     result = x.strVal
   of nnkPrefix:
     if x[0].strVal == "?":
@@ -46,7 +64,7 @@ proc generateExpr(x: NimNode): string =
   of nnkCall:
     result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
   of nnkDotExpr:
-    result = fmt"{x[0]}.{x[1]}"
+    result = fmt"{x[0]}.{generateExpr(x[1], x[0])}"
   of nnkBracket:
     result = "("
     for i in 0..<x.len:
@@ -64,15 +82,19 @@ func tableName[T](x: typedesc[T]): string =
 func tableName[T](x: typedesc[seq[T]]): string =
   result = $T
 
-func sqlExists[T](q: static[TableQuery[T]]): string =
+func tableName[T](x: typedesc[Option[T]]): string =
+  result = $T
+
+func sqlExists*[T](q: static[TableQuery[T]]): string =
+  ## Implements `EXISTS()` for the query builder
   const table = T.tableName
   result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
 
 
-macro where*[T](table: typedesc[T], query: untyped, variables: varargs[typed]): TableQuery[T] =
-  let whereClause =  query.generateExpr()
-  echo whereClause
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(ident"fmt", newLit whereClause))
+macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
+  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+  let whereClause =  query.generateExpr(tableObject)
+  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(bindSym"fmt", newLit whereClause))
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =
   const
@@ -86,9 +108,3 @@ proc exists*[T](db; q: static[TableQuery[T]], args): bool =
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
   db.getValue[:int64](query).unsafeGet() == 1
 
-type
-  Show = object
-  Episode = object
-
-echo Show.where(exists(Episode.where(show == Show.id and status == 0))).string
-echo Show.where(episode.id in [1, 2, 3]).string
