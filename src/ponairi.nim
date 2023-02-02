@@ -165,7 +165,7 @@ const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
 
 
 func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
-func sqlType*(T: typedesc[SomeInteger]): string {.inline.} = "INTEGER"
+func sqlType*(T: typedesc[SomeOrdinal]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[bool]): string {.inline.} = "BOOL"
 func sqlType*[V](T: typedesc[Option[V]]): string {.inline.} = sqlType(V)
 # We store Time as UNIX time and DateTime in sqlites format (Both in utc)
@@ -384,8 +384,11 @@ proc dbValue*(d: DateTime): DbValue =
 proc dbValue*(t: Time): DbValue =
   result = DbValue(kind: dvkInt, i: t.toUnix())
 
+func dbValue*(e: enum): DbValue =
+  result = DbValue(kind: dvkInt, i: e.ord)
+
 func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
-func to*[T: SomeInteger](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
+func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
 func to*[T](src: DbValue, dest: var Option[T]) =
   if src.kind != dvkNull:
     var val: T
