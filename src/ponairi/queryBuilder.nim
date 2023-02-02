@@ -25,11 +25,12 @@ using args: varargs[DbValue, dbValue]
 
 
 
-proc generateExpr(x, currentTable: NimNode): string =
+proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
   ## Implements the main bulk of converting Nim code to SQL
   ##
   ## **currentTable** is used for checking if the column the user is trying to access is available
-  template generateExpr(x: NimNode): string = generateExpr(x, currentTable)
+  ## **scope** is list of tables that are available. Used to check that the user isn't accessing a table that isn't available atm
+  template generateExpr(x: NimNode): string = generateExpr(x, currentTable, scope)
   case x.kind
   of nnkInfix:
     let
@@ -64,7 +65,16 @@ proc generateExpr(x, currentTable: NimNode): string =
   of nnkCall:
     result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
   of nnkDotExpr:
-    result = fmt"{x[0]}.{generateExpr(x[1], x[0])}"
+    # Check the table they are accessing is allowed
+    var found = false
+    for table in scope:
+      if table.eqIdent(x[0]):
+        found = true
+    if not found:
+      fmt"{x[0]} is not currently accessible".error(x[0])
+    # If found then add expression to access expression.
+    # We don't need to check if property exists since that will be checked next
+    result = fmt"{x[0]}.{generateExpr(x[1], x[0], scope & @[x[0]])}"
   of nnkBracket:
     result = "("
     for i in 0..<x.len:
@@ -93,7 +103,7 @@ func sqlExists*[T](q: static[TableQuery[T]]): string =
 
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
-  let whereClause =  query.generateExpr(tableObject)
+  let whereClause =  query.generateExpr(tableObject, @[tableObject])
   result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(bindSym"fmt", newLit whereClause))
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =

@@ -180,3 +180,7 @@ suite "Query builder":
     check not compiles(Person.where(
       exists(Dog.where(owner == Person.owner))
     ))
+
+  test "Can only access tables that are in scope":
+    check not compiles(Person.where(Dog.name == "test"))
+
