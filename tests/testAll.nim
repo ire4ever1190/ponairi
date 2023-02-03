@@ -1,7 +1,8 @@
 import std/[
   unittest,
   options,
-  times
+  times,
+  strformat
 ]
 import ponairi {.all.}
 
@@ -17,7 +18,7 @@ type
     status*: Status
     extraInfo: Option[string]
 
-  Dog* = object
+  Dog* = ref object
     name {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
 
@@ -25,6 +26,14 @@ type
     name*, age*: string
     another {.references: Person.name, cascade.}: string
 
+func `$`(d: Dog): string =
+  if d != nil:
+    fmt"{d.name} -> {d.owner}"
+  else:
+    "nil"
+
+func `==`(a, b: Dog): bool =
+  a.name == b.name and a.owner == b.owner
 
 
 
@@ -36,7 +45,7 @@ const
   people = [jake, john]
 
 
-const jakesDogs = [
+let jakesDogs = [
   Dog(owner: "Jake", name: "Dog"),
   Dog(owner: "Jake", name: "Bark"),
   Dog(owner: "Jake", name: "Woof"),
@@ -80,6 +89,25 @@ suite "Base API":
   test "Load parent in relation":
     let dog = jakesDogs[0]
     check db.load(dog, owner) == jake
+
+  test "Upsert can ignore fields":
+    let oldVal = jake
+    var person = jake
+    person.age = int.high
+    db.upsert(person, age)
+    check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
+
+  test "Upsert a sequence":
+    db.upsert(jakesDogs)
+
+  test "Upsert check fields exist":
+    check not compiles(db.upsert(jake, test))
+
+  test "Finding to tuples":
+    let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+    for row in pairs:
+      check row.owner == "Jake"
+      check row.dog != ""
 
   test "Upsert":
     let oldVal = jakesDogs[0]

@@ -159,10 +159,11 @@ runnableExamples:
   assert db.find(User, sql"SELECT * FROM User") == user
 #==#
 
-
+type
+  SomeTable* = ref[object] | object
+    ## Supported types for reprsenting table schema
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
-
 
 func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
 func sqlType*(T: typedesc[SomeOrdinal]): string {.inline.} = "INTEGER"
@@ -217,7 +218,8 @@ template transaction(db; body: untyped) =
     db.rollback()
     raise
 
-macro createSchema(T: typedesc[object]): SqlQuery =
+template fieldPairs(x: ref object): untyped = fieldPairs(x[])
+macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
   result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
@@ -264,7 +266,7 @@ macro createSchema(T: typedesc[object]): SqlQuery =
   result.join ")"
   result = sqlLit(result)
 
-macro createInsert[T: object](table: typedesc[T]): SqlQuery =
+macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   ## Returns a string that can be used to insert an object into the database
   let impl = table.lookupImpl()
   result = newLit(fmt"INSERT INTO {impl.getName()} (")
@@ -283,7 +285,7 @@ macro createInsert[T: object](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
+macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[string]): SqlQuery =
   ## Returns a string that can be used to insert or update an object into the database
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
@@ -291,14 +293,21 @@ macro createUpsert[T: object](table: typedesc[T]): SqlQuery =
   var
     conflicts: seq[string]
     updateStmts: seq[string]
+    excludes: seq[string]
+  # Check all the excluded properties exist
+  for prop in excludeProps:
+    if not table.hasProperty(prop):
+      fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
+    excludes &= prop.strVal
+
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
-    else:
+    elif property.name notin excludes:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
-  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(" ,")}"""
+  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
 template insertImpl() =
@@ -309,17 +318,17 @@ template insertImpl() =
     when not field.hasCustomPragma(autoIncrement):
       params &= dbValue(field)
 
-proc insert*[T: object](db; item: T) =
+proc insert*[T: SomeTable](db; item: T) =
   ## Inserts an object into the database
   insertImpl()
   db.exec(query, params)
 
-proc insertID*[T: object](db; item: T): int64 =
+proc insertID*[T: SomeTable](db; item: T): int64 =
   ## Inserts an object and returns the auto generated ID
   insertImpl()
   db.insertID(query, params)
 
-proc insert*[T: object](db; items: openArray[T]) =
+proc insert*[T: SomeTable](db; items: openArray[T]) =
   ## Inserts the list of items into the database.
   ## This gets ran in a transaction so if an error happens then none
   ## of the items are saved to the database
@@ -327,34 +336,61 @@ proc insert*[T: object](db; items: openArray[T]) =
     for item in items:
       db.insert item
 
-proc upsert*[T: object](db; item: T) =
-  ## Trys to insert an item into the database. If it conflicts with an
-  ## existing item then it insteads updates the values to reflect item.
-  ##
-  ## .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
-  const query = createUpsert(T)
+proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
+  const query = createUpsert(T, exclude)
   var params: seq[DbValue]
   for name, field in item.fieldPairs:
     params &= dbValue(field)
   db.exec(query, params)
 
-proc upsert*[T: object](db; items: openArray[T]) =
-  ## Upsets a list of items into the database
-  ##
-  ## - See [upsert(db, item)]
-  ## - See [insert(db, items)]
+proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
   db.transaction:
     for item in items:
-      db.upsert item
+      db.upsertImpl(item, exclude)
 
-proc create*[T: object](db; table: typedesc[T]) =
+# We use a macro so we can get the items as nodes.
+# Means that we can properly assign compile time errors to them
+
+# Need to use untyped since macros currently have problems with matching openArray | T
+macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
+  ##[
+    Trys to insert an item (or items) into the database. If it conflicts with an
+    existing item then it insteads updates the values to reflect item. If inserting a list of items
+    then it is ran in a transaction
+
+    If you don't want fields to be excluded then you can pass a list of fields to exclude in.
+
+    ```nim
+    # Using the person example we can show how to update
+    var jake = db.find(Person, sql"SELECT * WHERE name = 'Jake'")
+    jake.age = 100
+    # We have now updated Jake in the database to be 100 years old
+    db.upsert(jake)
+    # If we want other fields untouched then we can exclude them.
+    # This is handy if constructing the object yourself and not initialising all the fields.
+    # If we didn't exclude age then Jake would become 0 years old
+    db.upsert(Person(name: "Jake"), age)
+    ```
+
+    .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
+  ]##
+  var excludedProps = nnkBracket.newTree()
+  for prop in excludes:
+    if prop.kind != nnkIdent:
+      "Only properties can be excluded".error(prop)
+    # Since we can't lookup the implementation of T here we instead
+    # just build a list of props and then check if they exist later in createUpsert
+    excludedProps &= newLit prop.strVal
+  result = newCall(bindSym"upsertImpl", db, item, excludedProps)
+
+proc create*[T: SomeTable](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
   runnableExamples:
     let db = newConn(":memory:")
     # Create object
     type Something = object
       foo, bar: int
-    # Use `create` to make a table named 'something' with field reflecting`Something`
+    # Use `create` to make a table named 'something' with field reflecting `Something`
     db.create Something
   #==#
   const schema = createSchema(T)
@@ -391,20 +427,23 @@ func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
 func to*[T](src: DbValue, dest: var Option[T]) =
   if src.kind != dvkNull:
-    var val: T
+    when T is SomeTable:
+      var val = T()
+    else:
+      var val: T
     src.to(val)
     dest = some val
 func to*(src: DbValue, dest: var bool) {.inline.} = dest = src.i == 1
 func to*(src: DbValue, dest: var Time) {.inline.} = dest = src.i.fromUnix()
 proc to*(src: DbValue, dest: var DateTime) {.inline.} = dest = src.s.parse(dateFormat, utc())
 
-proc to*[T: object | tuple](row: Row, dest: var T) =
+proc to*[T: SomeTable | tuple](row: Row, dest: var T) =
   var i = 0
   for field, value in dest.fieldPairs:
     row[i].to(value)
     i += 1
 
-macro load*[C: object](db; child: C, field: untyped): object =
+macro load*[C: SomeTable](db; child: C, field: untyped): object =
   ## Loads parent from child using field
   runnableExamples:
     let db = newConn(":memory:")
@@ -443,13 +482,13 @@ macro load*[C: object](db; child: C, field: untyped): object =
       return newCall("find", db, ident table, newCall("sql", newLit query), nnkDotExpr.newTree(child, field))
   fmt"{field} is not a property of {impl.getName()}".error(field)
 
-proc find*[T: object | tuple](db; table: typedesc[T], query: SqlQuery, args): T =
+proc find*[T: SomeTable | tuple](db; table: typedesc[T], query: SqlQuery, args): T =
   ## Returns first row that matches **query**
   let row = db.getRow(query, args)
   doAssert row.isSome(), "Could not find row in database"
   row.unsafeGet().to(result)
 
-proc find*[T: object](db; table: typedesc[Option[T]], query: SqlQuery, args): Option[T] =
+proc find*[T: SomeTable](db; table: typedesc[Option[T]], query: SqlQuery, args): Option[T] =
   ## Returns first row that matches **query**. If nothing matches then it returns `none(T)`
   let row = db.getRow(query, args)
   if row.isSome:
@@ -457,26 +496,29 @@ proc find*[T: object](db; table: typedesc[Option[T]], query: SqlQuery, args): Op
     row.unsafeGet().to(res)
     result = some res
 
-iterator find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): T =
+iterator find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): T =
   for row in db.rows(query, args):
-    var res: T
+    when T is SomeTable:
+      var res = T()
+    else:
+      var res =  default(T)
     row.to(res)
     yield res
 
-iterator find*[T: object](db; table: typedesc[seq[T]]): T =
+iterator find*[T: SomeTable](db; table: typedesc[seq[T]]): T =
   ## Returns all rows that belong to **table**
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
 
-proc find*[T: object | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
+proc find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): seq[T] =
   for row in db.find(table, query, args):
     result &= row
 
-proc find*[T: object](db; table: typedesc[seq[T]]): seq[T] =
+proc find*[T: SomeTable](db; table: typedesc[seq[T]]): seq[T] =
   for row in db.find(table):
     result &= row
 
-macro createUniqueWhere[T: object](table: typedesc[T]): (bool, string) =
+macro createUniqueWhere[T: SomeTable](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in
   ## the table. If there are any primary keys, it will only use those in the WHERE clause.
   ## if there are no primary keys, they it will check every field
@@ -517,11 +559,11 @@ template queryWithWhere(query: static[string], call: untyped): untyped =
   # Having this call is just a hack, for some reason stmt wasn't made available in scope of where it was called
   call(db, stmt, params)
 
-proc delete*[T: object](db; item: T) =
+proc delete*[T: SomeTable](db; item: T) =
   ## Tries to delete item from table. Does nothing if it doesn't exist
   queryWithWhere(fmt"DELETE FROM {$T} WHERE :where", exec)
 
-proc exists*[T: object](db; item: T): bool =
+proc exists*[T: SomeTable](db; item: T): bool =
   ## Returns true if item already exists in the database
   queryWithWhere(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE :where LIMIT 1)", getValue[int64]).unsafeGet() == 1
 
