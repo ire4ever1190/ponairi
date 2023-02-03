@@ -21,6 +21,61 @@ import macroUtils
 
 type TableQuery[T] = distinct string
 
+type
+  QueryPart*[T] = distinct string
+
+proc `and`(a, b: QueryPart[bool]): QueryPart[bool] =
+  result = QueryPart[bool](fmt"({a.string} AND {b.string})")
+
+macro opToStr(op: untyped): string = newLit op[0].strVal
+
+dumpAstGen:
+  QueryPart[string]("Hello")
+
+template defineInfixOp(op, sideTypes, returnType: untyped) =
+  ## Creates an infix operator which has **sideTypes** on both sides of the operation and returns **returnType**
+  proc op*(a, b: QueryPart[sideTypes]): QueryPart[returnType] =
+    result = QueryPart[returnType](a.string & " " & opToStr(op) & " " & b.string)
+
+defineInfixOp(`<`, int, bool)
+defineInfixOp(`>`, int, bool)
+defineInfixOp(`>=`, int, bool)
+defineInfixOp(`<=`, int, bool)
+defineInfixOp(`==`, int, bool)
+defineInfixOp(`==`, bool, bool)
+defineInfixOp(`==`, string, bool)
+
+defineInfixOp(`and`, bool, bool)
+defineInfixOp(`or`, bool, bool)
+
+macro `?`*(param: untyped): QueryPart =
+  ## Adds a parameter into the query
+  const usageMsg = "parameters must be specified with ?[size, typ] or ?typ"
+  var
+    typ: NimNode
+    size = ""
+  case param.kind
+  of nnkIdent:
+    typ = param
+  of nnkBracket:
+    if param.len != 2:
+      usageMsg.error(param)
+    else:
+      if param[0].kind != nnkIntLit:
+        "Size must be an integer literal".error(param[0])
+      elif param[1].kind != nnkIdent:
+        "Second parameter must be a type".error(param[1])
+      size = $param[0]
+      typ = param[1]
+  else:
+    usageMsg.error(param)
+
+  result = nnkObjConstr.newTree(
+      nnkBracketExpr.newTree(bindSym"QueryPart", typ,
+      newLit "?" & size
+    )
+  )
+
 using db: DbConn
 using args: varargs[DbValue, dbValue]
 
@@ -39,95 +94,68 @@ func sqlExists*[T](q: static[TableQuery[T]]): string =
   const table = T.tableName
   result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
 
-proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string
+func initQueryPartNode[T](x: typedesc[T] | NimNode, val: string = $T): NimNode =
+  ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
+  when x is NimNode:
+    let typ = x
+  else:
+    let typ = ident $T
+  nnkCall.newTree(
+    nnkBracketExpr.newTree(ident"QueryPart", typ),
+    newLit val
+  )
 
-macro whereImpl*[T](table: typedesc[T], query: untyped, tables: varargs[typedesc]): TableQuery[T] =
-  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
-  let scope = collect:
-    for table in tables:
-      table
-  let whereClause =  query.generateExpr(tableObject, scope & @[tableObject])
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(bindSym"fmt", newLit whereClause))
 
-macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
-  result = newCall(bindSym"whereImpl", table, query)
-
-proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
-  ## Implements the main bulk of converting Nim code to SQL
+proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): NimNode =
+  ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
+  ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
+  ## reinvent the wheel with type checking.
   ##
-  ## **currentTable** is used for checking if the column the user is trying to access is available
-  ## **scope** is list of tables that are available. Used to check that the user isn't accessing a table that isn't available atm
-  template generateExpr(x: NimNode): string = generateExpr(x, currentTable, scope)
-  case x.kind
-  of nnkInfix:
-    let
-      op = x[0]
-      lhs = x[1]
-      rhs = x[2]
-    case op.strVal
-    of "==":
-      result = fmt"({generateExpr(lhs)} = {generateExpr(rhs)})"
-    of "and", "or", ">", "<", ">=", "<=", "!=":
-      result = fmt"({generateExpr(lhs)} {op.strVal} {generateExpr(rhs)})"
-    of "in":
-      result = fmt"{generateExpr(lhs)} IN {generateExpr(rhs)}"
-    else:
-      fmt"{op} is not supported".error(op)
+  case node.kind
   of nnkIdent, nnkSym:
-    if x.strVal notin ["true", "false"]:
-      if not currentTable.hasProperty(x):
-        fmt"{x} doesn't exist in {currentTable}".error(x)
-      result = x.strVal
+    if not node.eqIdent("true") and not node.eqIdent("false"):
+      if not currentTable.hasProperty(node):
+        fmt"{node} doesn't exist in {currentTable}".error(node)
+      let typ = currentTable.getType(node)
+      return initQueryPartNode(typ, fmt"{currentTable.strVal}.{node.strVal}")
     else:
-      # We technically could use TRUE and FALSE 
-      result = $int(x.boolVal)
-  of nnkPrefix:
-    if x[0].strVal == "?":
-      # TODO: Check value is number
-      result = fmt"?{x[1].intVal}"
-    else:
-      "Invalid prefix used".error(x[0])
+      # We technically could use TRUE and FALSE
+      return initQueryPartNode(bool, $int(node.boolVal))
   of nnkStrLit:
-    result = fmt"'{x.strVal}'"
+    return initQueryPartNode(string, fmt"'{node.strVal}'")
   of nnkIntLit:
-    result = $x.intVal
-  of nnkCall:
-    # Add the current scope to any where calls
-    for i in 1..<x.len:
-      let param = x[i]
-      template whereNode(): var NimNode = (if param[0].kind == nnkDotExpr: param[0][1] else: param[0])
-
-      if whereNode.eqIdent("where"):
-        # Rebind the call to use the version of where that can take custom scope
-        if param[0].kind == nnkDotExpr:
-           param[0][1] = bindSym "whereImpl"
-        else:
-          param[0] = bindSym "whereImpl"
-        for table in scope:
-          param &= table
-        x[i] = param
-    result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
+    return initQueryPartNode(int, $node.intVal)
   of nnkDotExpr:
-    # Check the table they are accessing is allowed
-    var found = false
-    for table in scope:
-      if table.eqIdent(x[0]):
-        found = true
-    if not found:
-      fmt"{x[0]} is not currently accessible".error(x[0])
+    when false:
+      # Check the table they are accessing is allowed
+      var found = false
+      for table in scope:
+        if table.eqIdent(node[0]):
+          found = true
+      if not found:
+        fmt"{x[0]} is not currently accessible".error(x[0])
     # If found then add expression to access expression.
     # We don't need to check if property exists since that will be checked next
-    result = fmt"{x[0]}.{generateExpr(x[1], x[0], scope & @[x[0]])}"
-  of nnkBracket:
-    result = "("
-    for i in 0..<x.len:
-      result &= generateExpr(x[i])
-      if i < x.len - 1:
-        result &= ", "
-    result &= ")"
+    let table = node[0]
+    return checkSymbols(node[1], table, scope)
+  of nnkInfix, nnkCall:
+    result = node
+    for i in 1..<node.len:
+      result[i] = result[i].checkSymbols(currentTable, scope)
   else:
-    echo x.kind
-    "Invalid SQL query".error(x)
+    result = node
+    for i in 0..<node.len:
+      result[i] = result[i].checkSymbols(currentTable, scope)
+
+proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool]): TableQuery[T] =
+  result = TableQuery[T](query.string)
+
+macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
+  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+  result = newCall(bindSym"whereImpl", table, checkSymbols(query, tableObject, @[tableObject]))
+  echo result.treeRepr
+
+
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =
   const

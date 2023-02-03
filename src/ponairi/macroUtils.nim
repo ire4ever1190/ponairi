@@ -1,6 +1,7 @@
 import std/[
   macrocache,
-  macros
+  macros,
+  options
 ]
 
 type
@@ -112,18 +113,26 @@ const properties = CacheTable"ponairi.properties"
 proc registerTable*(obj: NimNode) =
   ## Adds a tables properties to the properties cache table
   var props = newStmtList()
+  # Convert the properties to identDefs and save in the table.
+  # This is still better than accessing the object raw since it means properties like
+  # a, b, c: int
+  # are normalised into a: int, b: int, c: int which means less checking later
   for properties in obj.lookupImpl().getProperties():
-    props &= ident properties.name
+    props &= newIdentDefs(ident properties.name, properties.typ)
   properties[obj.strVal] = props
 
-proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
+proc getType*(obj: NimNode, property: string | NimNode): Option[NimNode] =
+  ## Returns the type for a property if it exists
   let key = obj.strVal
   if key in properties:
-    # Do simple linear scan for property
     for prop in properties[key]:
-      if prop.eqIdent(property): # TODO: Maybe normalise first to make comparison quicker?
-        return true
+      if prop[0].eqIdent(property):
+        return some prop[1]
   else:
+    # TODO: Add parameter to stop infinite recursion
     registerTable(obj)
-    # TODO: Run check while adding? Don't think that would cause too much slowdown tho
-    result = obj.hasProperty(property)
+    result = obj.getType(property)
+
+proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
+  ## Returns true if **obj** has **property**
+  result = obj.getType(property).isSome
