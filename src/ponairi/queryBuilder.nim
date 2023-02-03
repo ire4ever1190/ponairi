@@ -34,6 +34,10 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
 
+#
+# Functions that build the query
+#
+
 func pred*(x: QueryPart[int], y = 1): QueryPart[int] =
   result = QueryPart[int]($(x.string.parseInt() - y))
 
@@ -67,6 +71,13 @@ defineInfixOp(`==`, string, bool)
 
 defineInfixOp(`and`, bool, bool)
 defineInfixOp(`or`, bool, bool)
+
+func `~=`*(a, pattern: QueryPart[string]): QueryPart[bool] =
+  ## Used for **LIKE** matches. The pattern can use two wildcards
+  ##
+  ## - `%`: Matches >= 0 characters
+  ## - `_`: Matches a single character
+  result = QueryPart[bool](fmt"{a.string} LIKE {pattern.string}")
 
 func sqlLit(x: string): string = fmt"'{x}'"
 func sqlLit(x: SomeNumber): string = $x
@@ -128,6 +139,9 @@ macro `?`*(param: untyped): QueryPart =
   )
 
 
+#
+# Macros that implement the initial QueryPart generation
+#
 
 using db: DbConn
 using args: varargs[DbValue, dbValue]
@@ -219,7 +233,9 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
   result = newCall(bindSym"whereImpl", table, checkSymbols(query, tableObject, @[tableObject]))
 
-
+#
+# Overloads to use TableQuery
+#
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =
   const

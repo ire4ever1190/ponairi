@@ -229,3 +229,6 @@ suite "Query builder":
 
   test "In range":
     check db.find(seq[Person].where(age in 0..<45)) == @[jake]
+
+  test "Pattern matching":
+    check db.find(seq[Person].where(name ~= "%Ja%")) == @[jake]
