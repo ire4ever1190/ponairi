@@ -360,18 +360,14 @@ proc insert*[T: SomeTable](db; items: openArray[T]) =
     for item in items:
       db.insert item
 
-proc upsertImpl*[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
+proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
   const query = createUpsert(T, exclude)
   var params: seq[DbValue]
   for name, field in item.fieldPairs:
     params &= dbValue(field)
   db.exec(query, params)
 
-proc upsertImpl*[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
-  ## Upsets a list of items into the database
-  ##
-  ## - See [upsert(db, item)]
-  ## - See [insert(db, items)]
+proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
   db.transaction:
     for item in items:
       db.upsertImpl(item, exclude)
