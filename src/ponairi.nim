@@ -6,7 +6,10 @@ import std/options
 import std/times
 import ndb/sqlite
 
-import ponairi/pragmas
+import ponairi/[
+  pragmas,
+  macroUtils
+]
 
 ##[
 Pónairí can be used when all you need is a simple ORM for CRUD tasks.
@@ -156,57 +159,10 @@ runnableExamples:
 #==#
 
 type
-  Pragma = object
-    ## Represents a pragma attached to a field/table
-    name: string
-    parameters: seq[NimNode]
-
-  Property = object
-    ## Represents a property of an object
-    name: string
-    typ: NimNode
-    # I don't think a person will have too many pragmas so a seq should be fine for now
-    pragmas: seq[Pragma]
-
   SomeTable* = ref[object] | object
     ## Supported types for reprsenting table schema
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
-
-func initPragma(pragmaVal: NimNode): Pragma =
-  ## Creates a pragma object from nnkPragmaExpr node
-  case pragmaVal.kind
-  of nnkCall, nnkExprColonExpr:
-    result.name = pragmaVal[0].strVal
-    for parameter in pragmaVal[1..^1]:
-      result.parameters &= parameter
-  else:
-    result.name = pragmaVal.strVal
-
-func getTable(pragma: Pragma): string =
-  ## Returns name of table for references pragma
-  pragma.parameters[0][0].strVal
-
-func getColumn(pragma: Pragma): string =
-  ## Returns name of column for references pragma
-  pragma.parameters[0][1].strVal
-
-# I know these operations are slow, but I want to make it work first
-func contains(items: seq[Pragma], name: string): bool =
-  for item in items:
-    if item.name.eqIdent(name): return true
-
-func `[]`(items: seq[Pragma], name: string): Pragma =
-  for item in items:
-    if item.name.eqIdent(name): return item
-
-func isOptional(prop: Property): bool =
-  ## Returns true if the property has an optional type
-  result = prop.typ.kind == nnkBracketExpr and prop.typ[0].eqIdent("Option")
-
-func isPrimary(prop: Property): bool =
-  ## Returns true if the property is a primary key
-  result = "primary" in prop.pragmas
 
 func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
 func sqlType*(T: typedesc[SomeOrdinal]): string {.inline.} = "INTEGER"
@@ -286,28 +242,7 @@ proc getProperties(impl: NimNode): seq[Property] =
         newProp.name = property.getName
       result &= newProp
 
-proc lookupImpl(T: NimNode): NimNode =
-  ## Performs a series of magical lookups to get the original
-  ## type def of something
-  result = T
-  while result.kind != nnkTypeDef:
-    case result.kind
-    of nnkSym:
-      let impl = result.getImpl()
-      if impl.kind == nnkNilLit:
-        result = result.getTypeImpl()
-      else:
-        result = impl
-    of nnkBracketExpr:
-      result = result[1]
-    of nnkIdentDefs:
-      result = result[0].getTypeInst()
-    else:
-      echo result.treeRepr
-      "Beans misconfigured: Could not look up type".error(T)
-
 template fieldPairs(x: ref object): untyped = fieldPairs(x[])
-
 macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
@@ -374,7 +309,7 @@ macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: SomeTable](table: typedesc[T]): SqlQuery =
+macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[string]): SqlQuery =
   ## Returns a string that can be used to insert or update an object into the database
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
@@ -382,14 +317,21 @@ macro createUpsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   var
     conflicts: seq[string]
     updateStmts: seq[string]
+    excludes: seq[string]
+  # Check all the excluded properties exist
+  for prop in excludeProps:
+    if not table.hasProperty(prop):
+      fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
+    excludes &= prop.strVal
+
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
-    else:
+    elif property.name notin excludes:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
-  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(" ,")}"""
+  result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
 template insertImpl() =
@@ -418,25 +360,52 @@ proc insert*[T: SomeTable](db; items: openArray[T]) =
     for item in items:
       db.insert item
 
-proc upsert*[T: SomeTable](db; item: T) =
-  ## Trys to insert an item into the database. If it conflicts with an
-  ## existing item then it insteads updates the values to reflect item.
-  ##
-  ## .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
-  const query = createUpsert(T)
+proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
+  const query = createUpsert(T, exclude)
   var params: seq[DbValue]
   for name, field in item.fieldPairs:
     params &= dbValue(field)
   db.exec(query, params)
 
-proc upsert*[T: SomeTable](db; items: openArray[T]) =
-  ## Upsets a list of items into the database
-  ##
-  ## - See [upsert(db, item)]
-  ## - See [insert(db, items)]
+proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
   db.transaction:
     for item in items:
-      db.upsert item
+      db.upsertImpl(item, exclude)
+
+# We use a macro so we can get the items as nodes.
+# Means that we can properly assign compile time errors to them
+
+# Need to use untyped since macros currently have problems with matching openArray | T
+macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
+  ##[
+    Trys to insert an item (or items) into the database. If it conflicts with an
+    existing item then it insteads updates the values to reflect item. If inserting a list of items
+    then it is ran in a transaction
+
+    If you don't want fields to be excluded then you can pass a list of fields to exclude in.
+
+    ```nim
+    # Using the person example we can show how to update
+    var jake = db.find(Person, sql"SELECT * WHERE name = 'Jake'")
+    jake.age = 100
+    # We have now updated Jake in the database to be 100 years old
+    db.upsert(jake)
+    # If we want other fields untouched then we can exclude them.
+    # This is handy if constructing the object yourself and not initialising all the fields.
+    # If we didn't exclude age then Jake would become 0 years old
+    db.upsert(Person(name: "Jake"), age)
+    ```
+
+    .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
+  ]##
+  var excludedProps = nnkBracket.newTree()
+  for prop in excludes:
+    if prop.kind != nnkIdent:
+      "Only properties can be excluded".error(prop)
+    # Since we can't lookup the implementation of T here we instead
+    # just build a list of props and then check if they exist later in createUpsert
+    excludedProps &= newLit prop.strVal
+  result = newCall(bindSym"upsertImpl", db, item, excludedProps)
 
 proc create*[T: SomeTable](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
@@ -445,7 +414,7 @@ proc create*[T: SomeTable](db; table: typedesc[T]) =
     # Create object
     type Something = object
       foo, bar: int
-    # Use `create` to make a table named 'something' with field reflecting`Something`
+    # Use `create` to make a table named 'something' with field reflecting `Something`
     db.create Something
   #==#
   const schema = createSchema(T)
