@@ -4,7 +4,8 @@ import std/[
   strformat,
   options,
   typetraits,
-  macrocache
+  macrocache,
+  sugar
 ]
 
 import macroUtils
@@ -24,6 +25,32 @@ using db: DbConn
 using args: varargs[DbValue, dbValue]
 
 
+func tableName[T](x: typedesc[T]): string =
+  result = $T
+
+func tableName[T](x: typedesc[seq[T]]): string =
+  result = $T
+
+func tableName[T](x: typedesc[Option[T]]): string =
+  result = $T
+
+func sqlExists*[T](q: static[TableQuery[T]]): string =
+  ## Implements `EXISTS()` for the query builder
+  const table = T.tableName
+  result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+
+proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string
+
+macro whereImpl*[T](table: typedesc[T], query: untyped, tables: varargs[typedesc]): TableQuery[T] =
+  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+  let scope = collect:
+    for table in tables:
+      table
+  let whereClause =  query.generateExpr(tableObject, scope & @[tableObject])
+  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(bindSym"fmt", newLit whereClause))
+
+macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
+  result = newCall(bindSym"whereImpl", table, query)
 
 proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
   ## Implements the main bulk of converting Nim code to SQL
@@ -49,8 +76,6 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
   of nnkIdent, nnkSym:
     if not currentTable.hasProperty(x):
       fmt"{x} doesn't exist in {currentTable}".error(x)
-    else:
-      echo fmt"{x} exists in {currentTable}"
     result = x.strVal
   of nnkPrefix:
     if x[0].strVal == "?":
@@ -63,6 +88,19 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
   of nnkIntLit:
     result = $x.intVal
   of nnkCall:
+    # Add the current scope to any where calls
+    for param in x[1..^1]:
+      template whereNode(): var NimNode = (if param[0].kind == nnkDotExpr: param[0][1] else: param[0])
+
+      if whereNode.eqIdent("where"):
+        # Rebind the call to use the version of where that can take custom scope
+        if param[0].kind == nnkDotExpr:
+           param[0][1] = bindSym "whereImpl"
+        else:
+          param[0] = bindSym "whereImpl"
+        for table in scope:
+          param &= table
+
     result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
   of nnkDotExpr:
     # Check the table they are accessing is allowed
@@ -75,6 +113,7 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
     # If found then add expression to access expression.
     # We don't need to check if property exists since that will be checked next
     result = fmt"{x[0]}.{generateExpr(x[1], x[0], scope & @[x[0]])}"
+    echo result
   of nnkBracket:
     result = "("
     for i in 0..<x.len:
@@ -85,26 +124,6 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
   else:
     echo x.kind
     "Invalid SQL query".error(x)
-
-func tableName[T](x: typedesc[T]): string =
-  result = $T
-
-func tableName[T](x: typedesc[seq[T]]): string =
-  result = $T
-
-func tableName[T](x: typedesc[Option[T]]): string =
-  result = $T
-
-func sqlExists*[T](q: static[TableQuery[T]]): string =
-  ## Implements `EXISTS()` for the query builder
-  const table = T.tableName
-  result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
-
-
-macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
-  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
-  let whereClause =  query.generateExpr(tableObject, @[tableObject])
-  result = nnkCall.newTree(nnkBracketExpr.newTree(bindSym"TableQuery", table), newCall(bindSym"fmt", newLit whereClause))
 
 proc find*[T](db; q: static[TableQuery[T]], args): T =
   const

@@ -212,3 +212,8 @@ suite "Query builder":
   test "Can only access tables that are in scope":
     check not compiles(Person.where(Dog.name == "test"))
 
+  test "Can access outer table in inner call":
+    check db.find(seq[Person].where(
+      exists(Dog.where(owner == Person.name))
+    )) == @[jake]
+
