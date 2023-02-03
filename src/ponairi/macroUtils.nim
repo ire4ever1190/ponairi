@@ -49,17 +49,21 @@ func `[]`*(items: seq[Pragma], name: string): Pragma =
   for item in items:
     if item.name.eqIdent(name): return item
 
-proc getName*(n: NimNode): string =
+proc getNameSym*(n: NimNode): NimNode =
+  ## Gets the name node for an object definition
   case n.kind
   of nnkIdent, nnkSym:
-    result = n.strVal
+    result = n
   of nnkPostFix:
-    result = n[1].getName()
+    result = n[1].getNameSym()
   of nnkTypeDef:
-    result = n[0].getName()
+    result = n[0].getNameSym()
   else:
     echo n.treeRepr
     assert false, "Name is invalid"
+
+proc getName*(n: NimNode): string =
+  result = n.getNameSym.strVal
 
 proc getProperties*(impl: NimNode): seq[Property] =
   let identDefs = if impl[2].kind == nnkRefTy: impl[2][0][2] else: impl[2][2]
@@ -105,6 +109,13 @@ func isPrimary*(prop: Property): bool =
 
 const properties = CacheTable"ponairi.properties"
 
+proc registerTable*(obj: NimNode) =
+  ## Adds a tables properties to the properties cache table
+  var props = newStmtList()
+  for properties in obj.lookupImpl().getProperties():
+    props &= ident properties.name
+  properties[obj.strVal] = props
+
 proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
   let key = obj.strVal
   if key in properties:
@@ -113,9 +124,6 @@ proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
       if prop.eqIdent(property): # TODO: Maybe normalise first to make comparison quicker?
         return true
   else:
-    var props = newStmtList()
-    for properties in obj.lookupImpl().getProperties():
-      props &= ident properties.name
-    properties[key] = props
+    registerTable(obj)
     # TODO: Run check while adding? Don't think that would cause too much slowdown tho
     result = obj.hasProperty(property)

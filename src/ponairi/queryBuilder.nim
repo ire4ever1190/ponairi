@@ -89,7 +89,8 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
     result = $x.intVal
   of nnkCall:
     # Add the current scope to any where calls
-    for param in x[1..^1]:
+    for i in 1..<x.len:
+      let param = x[i]
       template whereNode(): var NimNode = (if param[0].kind == nnkDotExpr: param[0][1] else: param[0])
 
       if whereNode.eqIdent("where"):
@@ -100,7 +101,7 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
           param[0] = bindSym "whereImpl"
         for table in scope:
           param &= table
-
+        x[i] = param
     result = fmt"{{sql{x[0].strVal}({repr(x[1])})}}"
   of nnkDotExpr:
     # Check the table they are accessing is allowed
@@ -113,7 +114,6 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
     # If found then add expression to access expression.
     # We don't need to check if property exists since that will be checked next
     result = fmt"{x[0]}.{generateExpr(x[1], x[0], scope & @[x[0]])}"
-    echo result
   of nnkBracket:
     result = "("
     for i in 0..<x.len:

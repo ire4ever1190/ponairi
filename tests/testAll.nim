@@ -4,7 +4,7 @@ import std/[
   times,
   strformat
 ]
-import ponairi {.all.}
+import ponairi
 
 type
   Status = enum

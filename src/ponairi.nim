@@ -222,6 +222,7 @@ template fieldPairs(x: ref object): untyped = fieldPairs(x[])
 macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
+  registerTable(impl.getNameSym)
   result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
   let properties = impl.getProperties()
   # Keep list of primary keys so that we can generate them last.
