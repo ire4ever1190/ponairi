@@ -74,9 +74,13 @@ proc generateExpr(x, currentTable: NimNode, scope: seq[NimNode]): string =
     else:
       fmt"{op} is not supported".error(op)
   of nnkIdent, nnkSym:
-    if not currentTable.hasProperty(x):
-      fmt"{x} doesn't exist in {currentTable}".error(x)
-    result = x.strVal
+    if x.strVal notin ["true", "false"]:
+      if not currentTable.hasProperty(x):
+        fmt"{x} doesn't exist in {currentTable}".error(x)
+      result = x.strVal
+    else:
+      # We technically could use TRUE and FALSE 
+      result = $int(x.boolVal)
   of nnkPrefix:
     if x[0].strVal == "?":
       # TODO: Check value is number
