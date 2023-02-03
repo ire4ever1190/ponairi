@@ -232,3 +232,8 @@ suite "Query builder":
 
   test "Pattern matching":
     check db.find(seq[Person].where(name ~= "%Ja%")) == @[jake]
+
+  test "Parameters":
+    check db.find(Person.where(name == ?string), "Jake") == jake
+    check db.find(Person.where(name == ?[1, string]), "Jake") == jake
+

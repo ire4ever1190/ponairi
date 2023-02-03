@@ -4,7 +4,7 @@ import std/macrocache
 import std/strutils
 import std/options
 import std/times
-import ndb/sqlite
+import ndb/sqlite except `?`
 
 import ponairi/[
   pragmas,
@@ -572,4 +572,4 @@ export hasCustomPragma # Wouldn't bind
 export replace
 export queryBuilder
 export pragmas
-export sqlite
+export sqlite except `?`

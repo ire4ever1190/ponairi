@@ -1,4 +1,4 @@
-import ndb/sqlite
+import ndb/sqlite except `?`
 import std/[
   macros,
   strformat,
@@ -104,35 +104,6 @@ func contains*[T: SomeInteger](range: HSlice[QueryPart[T], QueryPart[T]], number
   ## Checks if a number is within a range
   result = QueryPart[bool](fmt"{number.string} BETWEEN {range.a.string} AND {range.b.string}")
 
-macro `?`*(param: untyped): QueryPart =
-  ## Adds a parameter into the query
-  const usageMsg = "parameters must be specified with ?[size, typ] or ?typ"
-  var
-    typ: NimNode
-    size = ""
-  case param.kind
-  of nnkIdent:
-    typ = param
-  of nnkBracket:
-    if param.len != 2:
-      usageMsg.error(param)
-    else:
-      if param[0].kind != nnkIntLit:
-        "Size must be an integer literal".error(param[0])
-      elif param[1].kind != nnkIdent:
-        "Second parameter must be a type".error(param[1])
-      size = $param[0]
-      typ = param[1]
-  else:
-    usageMsg.error(param)
-
-  result = nnkObjConstr.newTree(
-      nnkBracketExpr.newTree(bindSym"QueryPart", typ,
-      newLit "?" & size
-    )
-  )
-
-
 #
 # Macros that implement the initial QueryPart generation
 #
@@ -154,6 +125,30 @@ func initQueryPartNode(x: NimNode, val: string): NimNode =
 func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
+macro `?`*(param: untyped): QueryPart =
+  ## Adds a parameter into the query
+  const usageMsg = "parameters must be specified with ?[size, typ] or ?typ"
+  var
+    typ: NimNode
+    size = ""
+  case param.kind
+  of nnkIdent:
+    typ = param
+  of nnkBracket:
+    if param.len != 2:
+      usageMsg.error(param)
+    else:
+      if param[0].kind != nnkIntLit:
+        "Size must be an integer literal".error(param[0])
+      elif param[1].kind != nnkIdent:
+        "Second parameter must be a type".error(param[1])
+      size = $param[0].intVal
+      typ = param[1]
+  else:
+    usageMsg.error(param)
+
+  result = initQueryPartNode(typ, "?" & size)
+
 
 proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
@@ -163,16 +158,16 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
   result = node
   case node.kind
   of nnkIdent, nnkSym:
-    if not node.eqIdent("true") and not node.eqIdent("false"):
+    if node.eqIdent("true") or node.eqIdent("false"):
+      # We technically could use TRUE and FALSE
+      return initQueryPartNode(bool, $int(node.boolVal))
+    else:
       let typ = currentTable.getType(node)
       if typ.isNone:
         fmt"{node} doesn't exist in {currentTable}".error(node)
       return initQueryPartNode(typ.unsafeGet, fmt"{currentTable.strVal}.{node.strVal}")
-    else:
-      # We technically could use TRUE and FALSE
-      return initQueryPartNode(bool, $int(node.boolVal))
+
   of nnkStrLit:
-    echo node.strVal
     return initQueryPartNode(string, fmt"'{node.strVal}'")
   of nnkIntLit:
     return initQueryPartNode(int, $node.intVal)
@@ -216,6 +211,9 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
 
     for i in 1..<result.len:
       result[i] = result[i].checkSymbols(currentTable, scope)
+  of nnkPrefix:
+    if node[0].eqIdent("?"):
+      return node
   else:
     for i in 0..<node.len:
       result[i] = result[i].checkSymbols(currentTable, scope)
