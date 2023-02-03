@@ -132,8 +132,8 @@ macro `?`*(param: untyped): QueryPart =
     typ: NimNode
     size = ""
   case param.kind
-  of nnkIdent:
-    typ = param
+  of nnkIdent, nnkSym:
+    typ = ident param.strVal
   of nnkBracket:
     if param.len != 2:
       usageMsg.error(param)
