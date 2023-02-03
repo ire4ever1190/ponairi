@@ -13,6 +13,7 @@ type
     name: string
     age: int
     a, b: string
+
 {.experimental: "dynamicBindSym".}
 proc getSym(x: typedesc): NimNode = bindSym($x)
 
