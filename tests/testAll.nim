@@ -236,4 +236,4 @@ suite "Query builder":
   test "Parameters":
     check db.find(Person.where(name == ?string), "Jake") == jake
     check db.find(Person.where(name == ?[1, string]), "Jake") == jake
-
+    check db.find(Person.where(age == ?[1, int]), 42) == jake
