@@ -217,3 +217,5 @@ suite "Query builder":
       exists(Dog.where(owner == Person.name))
     )) == @[jake]
 
+  test "Types are checked":
+    check not compiles(db.find(Person.where(name == 9)))

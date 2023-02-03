@@ -89,10 +89,10 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
 
-func sqlExists*[T](q: static[TableQuery[T]]): string =
+func exists*[T](q: TableQuery[T]): QueryPart[bool] =
   ## Implements `EXISTS()` for the query builder
   const table = T.tableName
-  result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+  result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)")
 
 func initQueryPartNode(x: NimNode, val: string): NimNode =
   ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
@@ -125,23 +125,34 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
       # We technically could use TRUE and FALSE
       return initQueryPartNode(bool, $int(node.boolVal))
   of nnkStrLit:
+    echo node.strVal
     return initQueryPartNode(string, fmt"'{node.strVal}'")
   of nnkIntLit:
     return initQueryPartNode(int, $node.intVal)
   of nnkDotExpr:
-    when false:
-      # Check the table they are accessing is allowed
-      var found = false
-      for table in scope:
-        if table.eqIdent(node[0]):
-          found = true
+    # Check the table they are accessing is allowed
+    var found = false
+    for table in scope:
+      if table.eqIdent(node[0]):
+        found = true
       if not found:
-        fmt"{x[0]} is not currently accessible".error(x[0])
+        fmt"{node[0]} is not currently accessible".error(node[0])
     # If found then add expression to access expression.
     # We don't need to check if property exists since that will be checked next
     let table = node[0]
     return checkSymbols(node[1], table, scope)
   of nnkInfix, nnkCall:
+    var
+      scope = scope
+      currentTable = currentTable
+    if node[0].kind == nnkDotExpr and node[0][1].eqIdent("where") or node[1].eqIdent("where"):
+      # User has done a `where` call and so we need to update the current table and scope to have
+      # the table that they are calling where on
+      currentTable = if node[0].kind == nnkDotExpr: node[0][0] else: node[1]
+      scope &= currentTable
+    elif node[0].kind == nnkBracketExpr and node[0][0].eqIdent("QueryPart"):
+      # Ignore QueryPart, don't even know how they get here
+      return node
     result = node
     for i in 1..<node.len:
       result[i] = result[i].checkSymbols(currentTable, scope)
@@ -156,7 +167,6 @@ proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool]): TableQuery[T] =
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
   result = newCall(bindSym"whereImpl", table, checkSymbols(query, tableObject, @[tableObject]))
-  echo result.treeRepr
 
 
 
@@ -170,5 +180,6 @@ proc exists*[T](db; q: static[TableQuery[T]], args): bool =
   const
     table = T.tableName
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+  echo query.string
   db.getValue[:int64](query).unsafeGet() == 1
 
