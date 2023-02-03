@@ -219,3 +219,13 @@ suite "Query builder":
 
   test "Types are checked":
     check not compiles(db.find(Person.where(name == 9)))
+
+  test "Can perform nil checks":
+    check db.find(seq[Person].where(extraInfo.isSome)) == @[jake]
+    check db.find(seq[Person].where(extraInfo.isNone())) == @[john]
+
+  test "Inside array":
+    check db.find(seq[Person].where(age in [42, 45, 46])) == people
+
+  test "In range":
+    check db.find(seq[Person].where(age in 0..<45)) == @[jake]
