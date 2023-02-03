@@ -1,17 +1,23 @@
 import std/[
   unittest,
-  options
+  options,
+  strformat
 ]
 import ponairi {.all.}
 
 type
+  Status = enum
+    Alive
+    Dead
+    Undead # Our schema supports zombie apocalypse
+
   Person = object
     name {.primary.}: string
     age: int
-    alive*: bool
+    status*: Status
     extraInfo: Option[string]
 
-  Dog* = object
+  Dog* = ref object
     name {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
 
@@ -19,6 +25,14 @@ type
     name*, age*: string
     another {.references: Person.name, cascade.}: string
 
+func `$`(d: Dog): string =
+  if d != nil:
+    fmt"{d.name} -> {d.owner}"
+  else:
+    "nil"
+
+func `==`(a, b: Dog): bool =
+  a.name == b.name and a.owner == b.owner
 
 let db = newConn(":memory:")
 
@@ -26,10 +40,10 @@ test "Table creation":
   db.create(Person, Dog, Something)
 
 const
-  jake = Person(name: "Jake", age: 42, alive: true)
-  john = Person(name: "John", age: 45, alive: false, extraInfo: some "Test")
+  jake = Person(name: "Jake", age: 42, status: Alive)
+  john = Person(name: "John", age: 45, status: Dead, extraInfo: some "Test")
 
-const jakesDogs = [
+let jakesDogs = [
   Dog(owner: "Jake", name: "Dog"),
   Dog(owner: "Jake", name: "Bark"),
   Dog(owner: "Jake", name: "Woof"),
