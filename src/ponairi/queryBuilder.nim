@@ -45,12 +45,6 @@ template `..<`*(a, b: QueryPart[int]): HSlice[QueryPart[int], QueryPart[int]] =
   ## Overload for `..<` to work with `QueryPart[int]`
   a .. pred(b)
 
-func `and`*(a, b: QueryPart[bool]): QueryPart[bool] =
-  result = QueryPart[bool](fmt"({a.string} AND {b.string})")
-
-func `or`*(a, b: QueryPart[bool]): QueryPart[bool] =
-  result = QueryPart[bool](fmt"({a.string} OR {b.string})")
-
 macro opToStr(op: untyped): string = newLit op[0].strVal
 
 dumpAstGen:
@@ -59,7 +53,7 @@ dumpAstGen:
 template defineInfixOp(op, sideTypes, returnType: untyped) =
   ## Creates an infix operator which has **sideTypes** on both sides of the operation and returns **returnType**
   func op*(a, b: QueryPart[sideTypes]): QueryPart[returnType] =
-    result = QueryPart[returnType](a.string & " " & opToStr(op) & " " & b.string)
+    result = QueryPart[returnType](a.string & " " & toUpperAscii(opToStr(op)) & " " & b.string)
 
 defineInfixOp(`<`, int, bool)
 defineInfixOp(`>`, int, bool)
