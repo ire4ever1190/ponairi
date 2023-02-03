@@ -94,7 +94,7 @@ func sqlExists*[T](q: static[TableQuery[T]]): string =
   const table = T.tableName
   result = fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
 
-func initQueryPartNode[T](x: typedesc[T] | NimNode, val: string = $T): NimNode =
+func initQueryPartNode(x: NimNode, val: string): NimNode =
   ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
   when x is NimNode:
     let typ = x
@@ -105,6 +105,9 @@ func initQueryPartNode[T](x: typedesc[T] | NimNode, val: string = $T): NimNode =
     newLit val
   )
 
+func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
+  initQueryPartNode(ident $T, val)
+
 
 proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
@@ -114,10 +117,10 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
   case node.kind
   of nnkIdent, nnkSym:
     if not node.eqIdent("true") and not node.eqIdent("false"):
-      if not currentTable.hasProperty(node):
-        fmt"{node} doesn't exist in {currentTable}".error(node)
       let typ = currentTable.getType(node)
-      return initQueryPartNode(typ, fmt"{currentTable.strVal}.{node.strVal}")
+      if typ.isNone:
+        fmt"{node} doesn't exist in {currentTable}".error(node)
+      return initQueryPartNode(typ.unsafeGet, fmt"{currentTable.strVal}.{node.strVal}")
     else:
       # We technically could use TRUE and FALSE
       return initQueryPartNode(bool, $int(node.boolVal))
