@@ -237,3 +237,8 @@ suite "Query builder":
     check db.find(Person.where(name == ?string), "Jake") == jake
     check db.find(Person.where(name == ?[1, string]), "Jake") == jake
     check db.find(Person.where(age == ?[1, int]), 42) == jake
+
+  test "Can delete":
+    db.delete(Person.where(age == 42))
+    check db.find(seq[Person]) == @[john]
+    db.insert(jake)
