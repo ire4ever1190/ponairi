@@ -239,12 +239,12 @@ proc exists*[T](db; q: static[TableQuery[T]], args): bool =
   const
     table = T.tableName
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
-  db.getValue[:int64](query).unsafeGet() == 1
+  db.getValue[:int64](query, args).unsafeGet() == 1
 
 proc delete*[T](db; q: static[TableQuery[T]], args) =
   ## Deletes any row that matches the query
   const
     table = T.tableName
     query = sql fmt"DELETE FROM {table} WHERE {q.string}"
-  db.exec(query)
+  db.exec(query, args)
 
