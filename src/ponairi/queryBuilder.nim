@@ -250,7 +250,8 @@ macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
     # We want the error message to point to where the user is calling the query so we need to set it.
     let info = args.lineInfoObj
     # Set the line info of the error pragma
-    foo[0][1][0][0].setLineInfo(args.lineInfoObj)
+    when declared(macros.setLineInfo):
+      foo[0][1][0][0].setLineInfo(args.lineInfoObj)
     result &= foo
 
 proc find[T](db; q: static[TableQuery[T]], args): T {.inline.} =
