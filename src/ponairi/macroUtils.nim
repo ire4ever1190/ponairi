@@ -112,6 +112,8 @@ const properties = CacheTable"ponairi.properties"
 
 proc registerTable*(obj: NimNode) =
   ## Adds a tables properties to the properties cache table
+  if obj.strVal in properties:
+    return
   var props = newStmtList()
   # Convert the properties to identDefs and save in the table.
   # This is still better than accessing the object raw since it means properties like
