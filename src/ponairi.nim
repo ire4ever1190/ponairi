@@ -168,6 +168,7 @@ func sqlType*(T: typedesc[string]): string {.inline.} = "TEXT"
 func sqlType*(T: typedesc[SomeOrdinal]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[bool]): string {.inline.} = "BOOL"
 func sqlType*[V](T: typedesc[Option[V]]): string {.inline.} = sqlType(V)
+func sqlType*(T: typedesc[SomeFloat]): string {.inline.} = "REAL"
 # We store Time as UNIX time and DateTime in sqlites format (Both in utc)
 func sqlType*(T: typedesc[Time]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[DateTime]): string {.inline.} = "TEXT"
@@ -449,6 +450,7 @@ func dbValue*(e: enum): DbValue =
 
 func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
+func to*[T: SomeFloat](src: DbValue, dest: var T) {.inline.} = dest = T(src.f)
 func to*[T](src: DbValue, dest: var Option[T]) =
   if src.kind != dvkNull:
     when T is SomeTable:
