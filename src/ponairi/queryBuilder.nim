@@ -297,7 +297,12 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
         typ = param[1]
       else:
         usageMsg.error(node)
-      params &= repr typ
+      if pos == params.len:
+        params.insert(repr typ, pos)
+      elif pos > params.len:
+        "Invalid position for parameter".error(param)
+      elif repr(typ) != params[pos]:
+        fmt"Parameter at index {pos} is {params[pos]} but you tried to override with {typ}".error(param)
       result = initQueryPartNode(typ, "?" & $(pos + 1)) # SQLite parameters are 1 indexed
     else:
       for i in 1..<node.len: # We can ignore the first node, Nim will check it later

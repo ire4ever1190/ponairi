@@ -239,6 +239,17 @@ suite "Query builder":
     check db.find(Person.where(name == ?[0, string]), "Jake") == jake
     check db.find(Person.where(age == ?[0, int] and name == "Jake"), 42) == jake
 
+  test "Parameters can reuse numbers":
+    check db.find(Person.where(name == ?[0, string] and name == ?[0, string]), "Jake") == jake
+
+  test "Error if parameter is jumping too far ahead":
+    check not compiles(Person.where(name == ?[1, string]))
+
+  test "Error if parameter type doesn't line up":
+    # Don't know why someone would do this
+    # But I'm probably going to do it so best to check lol
+    check not compiles(Person.where(name == ?string and age == ?[0, int]))
+
   test "Type mismatches don't compile":
     check not compiles(db.find(Person.where(name == ?string), 9))
 
