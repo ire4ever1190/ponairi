@@ -138,6 +138,14 @@ defineInfixOp(`==`, string, bool)
 defineInfixOp(`and`, bool, bool)
 defineInfixOp(`or`, bool, bool)
 
+func `==`*[T](a, b: QueryPart[Option[T]]): QueryPart[bool] =
+  ## Checks if two optional values are equal using SQLites `IS` operator.
+  ## This means that two `none(T)` or two `some(T)` (if value inside is the same) values are considered equal
+  result = QueryPart[bool](fmt"{a.string} IS {pattern.string}")
+
+func `not`*(expression: QueryPart[bool]): QueryPart[bool] =
+  result = QueryPart[bool](fmt"NOT ({expression.string})")
+
 func `~=`*(a, pattern: QueryPart[string]): QueryPart[bool] =
   ## Used for **LIKE** matches. The pattern can use two wildcards
   ##
