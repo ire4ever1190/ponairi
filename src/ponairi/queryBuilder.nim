@@ -13,23 +13,93 @@ import std/[
 import macroUtils
 
 ##[
+
+  ## User Guide
+
   Query builder that can be used to make type safe queries.
   This doesn't aim to replace SQL and so certain situations will still require you to write SQL.
 
-  It basically is just for writing **WHERE** clauses that get interpreted different depeneding on the function you pass them to e.g.
-  If you pass a [TableQuery] to [find] then it will return the row/rows that match the clause but if you pass it to delete then it deletes
-  any row that matches
+  The query building is done with the [where] macro which takes a Table (which will be the expected return type) and a Nim expression.
+  The Nim expression is checked at compile time and then converted into SQL and so only the raw SQL string is stored. This means that there
+  is no runtime overhead when using the query builder.
+
+  Supported procedures are
+  - [find]
+  - [delete]
+  - [exists]
 ]##
 
+runnableExamples:
+  import ponairi
+  # First we define our schema
+  type
+    Customer = object
+      ## A customer of the store
+      name {.primary.}: string
+
+    Item = object
+      ## An item in the store
+      name {.primary.}: string
+      price: float
+
+    Cart = object
+      ## A cart containing the customers items that they are wanting to buy
+      id {.primary, autoIncrement.}: int
+      customer {.references: Customer.name.}: string
+
+    CartItem = object
+      ## Implements the many-to-many mapping of cart <-> item
+      item {.primary, references: Item.name.}: string
+      cart {.primary, references: Card.id.}: int
+
+  let db = newConn(":memory:")
+  db.create(Customer, Item, Cart, CartItem)
+
+  # Now we can use the query builder to write some queries.
+  # But first I'll show what it can protect against
+
+  # Doesn't compile since the cart ID is an integer and not a string
+  assert not compiles(Cart.where(id == "9"))
+  # Doesn't compile since CartItem table isn't accessible currently
+  assert not compiles(Cart.where(id == CartItem.item))
+  # Parameters need to have their types specified and so this doesn't compile since
+  # id is a string
+  assert not compiles(Card.where(id == ?string))
+
+  # We can write simple queries to check columns
+  db.insert Item(name: "Lamp", price: 9.0)
+  assert db.find(Item.where(price > 5)).name == "Lamp"
+
+  # We can also use parameters, only difference is we need to annotate the type.
+  # The position can also be set like ?[pos, typ]
+  assert db.find(Item.where(price > ?float), 5.0).name == "Lamp"
+
+  # We can also build complex sub queries. We will add in some more data
+  # and then find all customers that have a Lamp in their cart
+  db.insert Customer(name: "John Doe")
+  let id = db.insertID Cart(customer: "John Doe")
+  db.insert CartItem(item: "Lamp", cart: int(id))
+
+  assert db.find(Customer.where(
+      exists(Cart.where(
+        exists(
+            CartItem.where(item == "Lamp" and cart == Cart.id)
+        )
+      ))
+  )).name == "John Doe"
 
 type
   TableQuery*[T] = object
+    ## This is a full query. Stores information about the main table it is trying to access,
+    ## what the SQL to run is, and what parameters it has
     sql: string
     # Sequence of types for the parameters
     # Was too much of a pain to move around NimNodes
     params: seq[string]
 
   QueryPart*[T] = distinct string
+    ## This is a component of a query, stores the type that the SQL would return
+    ## and also the SQL that it is
 
 func tableName[T](x: typedesc[T]): string =
   result = $T
@@ -59,11 +129,11 @@ template defineInfixOp(op, sideTypes, returnType: untyped) =
     # I know the toUpperAscii isn't required, but I like my queries formatted like that
     result = QueryPart[returnType](a.string & " " & toUpperAscii(opToStr(op)) & " " & b.string)
 
-defineInfixOp(`<`, int, bool)
-defineInfixOp(`>`, int, bool)
-defineInfixOp(`>=`, int, bool)
-defineInfixOp(`<=`, int, bool)
-defineInfixOp(`==`, int, bool)
+defineInfixOp(`<`, SomeNumber, bool)
+defineInfixOp(`>`, SomeNumber, bool)
+defineInfixOp(`>=`, SomeNumber, bool)
+defineInfixOp(`<=`, SomeNumber, bool)
+defineInfixOp(`==`, SomeNumber, bool)
 defineInfixOp(`==`, bool, bool)
 defineInfixOp(`==`, string, bool)
 
@@ -108,6 +178,10 @@ func contains*[T: SomeInteger](range: HSlice[QueryPart[T], QueryPart[T]], number
   ## Checks if a number is within a range
   result = QueryPart[bool](fmt"{number.string} BETWEEN {range.a.string} AND {range.b.string}")
 
+func len*(str: QueryPart[string]): QueryPart[int] =
+  ## Returns the length of a string
+  result = QueryPart[int](fmt"LENGTH({str.string})")
+
 #
 # Macros that implement the initial QueryPart generation
 #
@@ -150,6 +224,8 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
     return initQueryPartNode(string, fmt"'{node.strVal}'")
   of nnkIntLit:
     return initQueryPartNode(int, $node.intVal)
+  of nnkFloatLit:
+    return initQueryPartNode(float, $node.floatVal)
   of nnkDotExpr:
     # Bit of a hacky check, but only assume table access when the thing they are accessing
     # starts with capital letter (I've never seen user defined objects that go against this)
@@ -227,6 +303,24 @@ proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray
   result = TableQuery[T](sql: query.string, params: @params)
 
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
+  ## Use this macro for genearting queries.
+  ## The query is a boolean expression made in Nim code
+  runnableExamples:
+    import ponairi/pragmas
+
+    type
+      ShopItem = object
+        id {.primary, autoIncrement.}: int
+        name: string
+        price: float # I know float is bad for price, this is an example
+
+    discard ShopItem.where(
+      # Normal Nim code gets put in here which gets converted into SQL.
+      (id == 9 and name.len > 9) or price == 0.0 or name == ?string
+    )
+    # Gets compiled into
+    # ShopItem.id == 9 AND LENGTH(ShopItem.name) > 9 OR ShopItem.price == 0.0 OR ShopItem.name == ?1
+  #==#
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
   var params: seq[string]
   let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
@@ -287,6 +381,10 @@ template generateIntermediateMacro(name, docs: untyped) =
     result = genAst(db, q, args, checkArgsSym, f):
       checkArgsSym(q.params, args)
       f(db, q, args)
+
+proc `$`(x: TableQuery): string =
+  ## Used for debugging a query, returns the generated SQL
+  x.sql
 
 generateIntermediateMacro(find):
   ## Finds any row/rows that match the query
