@@ -25,6 +25,7 @@ type
   Something* = object
     name*, age*: string
     another {.references: Person.name, cascade.}: string
+    price: float
 
 func `$`(d: Dog): string =
   if d != nil:
