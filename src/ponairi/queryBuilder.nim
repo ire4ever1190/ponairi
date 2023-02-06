@@ -68,7 +68,7 @@ runnableExamples:
 
   # We can write simple queries to check columns
   db.insert Item(name: "Lamp", price: 9.0)
-  assert db.find(Item.where(price > 5)).name == "Lamp"
+  assert db.find(Item.where(price > 5.0)).name == "Lamp"
 
   # We can also use parameters, only difference is we need to annotate the type.
   # The position can also be set like ?[pos, typ]
@@ -235,8 +235,8 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
       for table in scope:
         if table.eqIdent(node[0]):
           found = true
-        if not found:
-          fmt"{node[0]} is not currently accessible".error(node[0])
+      if not found:
+        fmt"{node[0]} is not currently accessible".error(node[0])
       # If found then add expression to access expression.
       # We don't need to check if property exists since that will be checked next
       let table = node[0]
