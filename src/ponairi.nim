@@ -160,7 +160,7 @@ runnableExamples:
 #==#
 
 type
-  SomeTable* = ref[object] | object
+  SomeTable* = (ref[object] | object) and not TableQuery[object]
     ## Supported types for reprsenting table schema
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
@@ -264,7 +264,7 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
       result.join ", "
   if primaryKeys.len > 0:
     result.join ", PRIMARY KEY (" & primaryKeys.join(", ") & ")"
-  result.join ")"
+  result.join ") STRICT"
   result = sqlLit(result)
 
 macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =

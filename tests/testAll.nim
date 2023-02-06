@@ -235,10 +235,17 @@ suite "Query builder":
 
   test "Parameters":
     check db.find(Person.where(name == ?string), "Jake") == jake
-    check db.find(Person.where(name == ?[1, string]), "Jake") == jake
-    check db.find(Person.where(age == ?[1, int]), 42) == jake
+    check db.find(Person.where(name == ?[0, string]), "Jake") == jake
+    check db.find(Person.where(age == ?[0, int] and name == "Jake"), 42) == jake
+
+  test "Type mismatches don't compile":
+    check not compiles(db.find(Person.where(name == ?string), 9))
+
+  test "Mismatched amount of parameters don't compile":
+    check not compiles(db.find(Person.where(name == ?string and name == ?int)))
 
   test "Can delete":
     db.delete(Person.where(age == 42))
     check db.find(seq[Person]) == @[john]
     db.insert(jake)
+

@@ -6,7 +6,8 @@ import std/[
   typetraits,
   macrocache,
   sugar,
-  strutils
+  strutils,
+  genasts
 ]
 
 import macroUtils
@@ -22,7 +23,12 @@ import macroUtils
 
 
 type
-  TableQuery[T] = distinct string
+  TableQuery*[T] = object
+    sql: string
+    # Sequence of types for the parameters
+    # Was too much of a pain to move around NimNodes
+    params: seq[string]
+
   QueryPart*[T] = distinct string
 
 func tableName[T](x: typedesc[T]): string =
@@ -47,12 +53,10 @@ template `..<`*(a, b: QueryPart[int]): HSlice[QueryPart[int], QueryPart[int]] =
 
 macro opToStr(op: untyped): string = newLit op[0].strVal
 
-dumpAstGen:
-  QueryPart[string]("Hello")
-
 template defineInfixOp(op, sideTypes, returnType: untyped) =
   ## Creates an infix operator which has **sideTypes** on both sides of the operation and returns **returnType**
   func op*(a, b: QueryPart[sideTypes]): QueryPart[returnType] =
+    # I know the toUpperAscii isn't required, but I like my queries formatted like that
     result = QueryPart[returnType](a.string & " " & toUpperAscii(opToStr(op)) & " " & b.string)
 
 defineInfixOp(`<`, int, bool)
@@ -80,7 +84,7 @@ func sqlLit(x: bool): string = (if x: "TRUE" else: "FALSE")
 func exists*[T](q: TableQuery[T]): QueryPart[bool] =
   ## Implements `EXISTS()` for the query builder
   const table = T.tableName
-  result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)")
+  result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)")
 
 func isSome*(q: QueryPart[Option[auto]]): QueryPart[bool] =
   ## Checks if a column is not null
@@ -125,32 +129,7 @@ func initQueryPartNode(x: NimNode, val: string): NimNode =
 func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
-macro `?`*(param: untyped): QueryPart =
-  ## Adds a parameter into the query
-  const usageMsg = "parameters must be specified with ?[size, typ] or ?typ"
-  var
-    typ: NimNode
-    size = ""
-  case param.kind
-  of nnkIdent, nnkSym:
-    typ = ident param.strVal
-  of nnkBracket:
-    if param.len != 2:
-      usageMsg.error(param)
-    else:
-      if param[0].kind != nnkIntLit:
-        "Size must be an integer literal".error(param[0])
-      elif param[1].kind != nnkIdent:
-        "Second parameter must be a type".error(param[1])
-      size = $param[0].intVal
-      typ = param[1]
-  else:
-    usageMsg.error(param)
-
-  result = initQueryPartNode(typ, "?" & size)
-
-
-proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): NimNode =
+proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], params: var seq[string]): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
@@ -185,10 +164,10 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
       # If found then add expression to access expression.
       # We don't need to check if property exists since that will be checked next
       let table = node[0]
-      return checkSymbols(node[1], table, scope)
+      return checkSymbols(node[1], table, scope, params)
     else:
       # Assume its a function call
-      result[0] = checkSymbols(node[0], currentTable, scope)
+      result[0] = checkSymbols(node[0], currentTable, scope, params)
   of nnkInfix, nnkCall:
     var
       scope = scope
@@ -210,41 +189,108 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode]): Ni
       result.insert(1, firstParam)
 
     for i in 1..<result.len:
-      result[i] = result[i].checkSymbols(currentTable, scope)
+      result[i] = result[i].checkSymbols(currentTable, scope, params)
   of nnkPrefix:
     if node[0].eqIdent("?"):
-      return node
+      # ? parameters need to be implemented like this so we can keep track of the
+      # parameters. Used to be implemented as a macro but then I couldn't get the parameters
+      # later
+      let param = node[1]
+      const usageMsg = "parameters must be specified with ?[pos, typ] or ?typ"
+      var
+        pos: int = params.len
+        typ: NimNode
+      case param.kind
+      of nnkIdent, nnkSym:
+        typ = ident param.strVal
+      of nnkBracket:
+        if param.len != 2:
+          usageMsg.error(param)
+        else:
+          if param[0].kind != nnkIntLit:
+            "Size must be an integer literal".error(param[0])
+          elif param[1].kind != nnkIdent:
+            "Second parameter must be a type".error(param[1])
+        pos = param[0].intVal
+        typ = param[1]
+      else:
+        usageMsg.error(node)
+      params &= repr typ
+      result = initQueryPartNode(typ, "?" & $(pos + 1)) # SQLite parameters are 1 indexed
+
   else:
     for i in 0..<node.len:
-      result[i] = result[i].checkSymbols(currentTable, scope)
+      result[i] = result[i].checkSymbols(currentTable, scope, params)
 
-proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool]): TableQuery[T] =
-  result = TableQuery[T](query.string)
+proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray[string]): TableQuery[T] =
+  ## This is the internal proc that forces the query to be compiled
+  result = TableQuery[T](sql: query.string, params: @params)
 
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
-  result = newCall(bindSym"whereImpl", table, checkSymbols(query, tableObject, @[tableObject]))
+  var params: seq[string]
+  let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
+  # Move the parameters into a node that we can pass into the second call
+  result = newCall(bindSym"whereImpl", table, queryNodes, newLit params)
 
 #
 # Overloads to use TableQuery
 #
 
-proc find*[T](db; q: static[TableQuery[T]], args): T =
+macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
+  ## Generates a series of checks to make sure the args types are correct
+  if types.len != args.len:
+    fmt"Got {args.len} arguments but expected {types.len}".error(args)
+  result = newStmtList()
+  for i in 0..<args.len:
+    let arg = args[i]
+    let foo = genAst(typ = parseExpr types[i], arg, i):
+      when typeof(arg) isnot typ:
+        {.error: "Expected " & $typ & " but got " & $typeof(arg) & " for argument " & $i.}
+    # We want the error message to point to where the user is calling the query so we need to set it.
+    let info = args.lineInfoObj
+    # Set the line info of the error pragma
+    foo[0][1][0][0].setLineInfo(args.lineInfoObj)
+    result &= foo
+
+proc find[T](db; q: static[TableQuery[T]], args): T {.inline.} =
   const
     table = T.tableName
-    query = sql fmt"SELECT * FROM {table} WHERE {q.string}"
+    query = sql fmt"SELECT * FROM {table} WHERE {q.sql}"
   db.find(T, query, args)
 
-proc exists*[T](db; q: static[TableQuery[T]], args): bool =
+proc exists[T](db; q: static[TableQuery[T]], args): bool =
   const
     table = T.tableName
-    query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.string} LIMIT 1)"
+    query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)"
   db.getValue[:int64](query, args).unsafeGet() == 1
 
-proc delete*[T](db; q: static[TableQuery[T]], args) =
-  ## Deletes any row that matches the query
+proc delete[T](db; q: static[TableQuery[T]], args) =
   const
     table = T.tableName
-    query = sql fmt"DELETE FROM {table} WHERE {q.string}"
+    query = sql fmt"DELETE FROM {table} WHERE {q.sql}"
   db.exec(query, args)
+
+template generateIntermediateMacro(name, docs: untyped) =
+  ## We need to have a macro that checks the types and then passes it off to the actual proc.
+  ## This just removes the boiler plate of having to write that macro for each proc
+  macro name*(db; q: TableQuery, args: varargs[untyped]): untyped =
+    docs
+    # When we get a query we perform two steps
+    # - Check the arguments are correct (types, number of args)
+    # - Then run the query
+    #
+    let checkArgsSym = bindSym"checkArgs"
+    result = genAst(db, q, args, checkArgsSym):
+      checkArgsSym(q.params, args)
+      db.name(q, args)
+
+generateIntermediateMacro(find):
+  ## Finds any row/rows that match the query
+
+generateIntermediateMacro(exists):
+  ## Returns true if the query finds atleast one row
+
+generateIntermediateMacro(delete):
+  ## Deletes any rows that match the query
 
