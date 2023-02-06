@@ -254,19 +254,19 @@ macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
       foo[0][1][0][0].setLineInfo(args.lineInfoObj)
     result &= foo
 
-proc find[T](db; q: static[TableQuery[T]], args): T {.inline.} =
+proc findImpl[T](db; q: static[TableQuery[T]], args): T {.inline.} =
   const
     table = T.tableName
     query = sql fmt"SELECT * FROM {table} WHERE {q.sql}"
   db.find(T, query, args)
 
-proc exists[T](db; q: static[TableQuery[T]], args): bool =
+proc existsImpl[T](db; q: static[TableQuery[T]], args): bool =
   const
     table = T.tableName
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)"
   db.getValue[:int64](query, args).unsafeGet() == 1
 
-proc delete[T](db; q: static[TableQuery[T]], args) =
+proc deleteImpl[T](db; q: static[TableQuery[T]], args) =
   const
     table = T.tableName
     query = sql fmt"DELETE FROM {table} WHERE {q.sql}"
@@ -281,10 +281,12 @@ template generateIntermediateMacro(name, docs: untyped) =
     # - Check the arguments are correct (types, number of args)
     # - Then run the query
     #
-    let checkArgsSym = bindSym"checkArgs"
-    result = genAst(db, q, args, checkArgsSym):
+    let
+      checkArgsSym = bindSym"checkArgs"
+      f = bindSym(astToStr(name) & "impl")
+    result = genAst(db, q, args, checkArgsSym, f):
       checkArgsSym(q.params, args)
-      db.name(q, args)
+      f(db, q, args)
 
 generateIntermediateMacro(find):
   ## Finds any row/rows that match the query

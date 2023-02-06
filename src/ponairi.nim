@@ -160,7 +160,7 @@ runnableExamples:
 #==#
 
 type
-  SomeTable* = (ref[object] | object) and not TableQuery[object]
+  SomeTable* = (ref[object] | object) and not TableQuery[auto]
     ## Supported types for reprsenting table schema
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
