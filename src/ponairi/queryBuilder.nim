@@ -198,7 +198,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
       let param = node[1]
       const usageMsg = "parameters must be specified with ?[pos, typ] or ?typ"
       var
-        pos: int = params.len
+        pos: BiggestInt = params.len
         typ: NimNode
       case param.kind
       of nnkIdent, nnkSym:
