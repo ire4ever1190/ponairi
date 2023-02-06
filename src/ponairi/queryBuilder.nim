@@ -299,7 +299,9 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
         usageMsg.error(node)
       params &= repr typ
       result = initQueryPartNode(typ, "?" & $(pos + 1)) # SQLite parameters are 1 indexed
-
+    else:
+      for i in 1..<node.len: # We can ignore the first node, Nim will check it later
+        result[i] = result[i].checkSymbols(currentTable, scope, params)
   else:
     for i in 0..<node.len:
       result[i] = result[i].checkSymbols(currentTable, scope, params)
@@ -347,10 +349,11 @@ macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
     let foo = genAst(typ = parseExpr types[i], arg, i):
       when typeof(arg) isnot typ:
         {.error: "Expected " & $typ & " but got " & $typeof(arg) & " for argument " & $i.}
-    # We want the error message to point to where the user is calling the query so we need to set it.
-    let info = args.lineInfoObj
-    # Set the line info of the error pragma
+
     when declared(macros.setLineInfo):
+      # We want the error message to point to where the user is calling the query so we need to set it.
+      let info = args.lineInfoObj
+      # Set the line info of the error pragma
       foo[0][1][0][0].setLineInfo(args.lineInfoObj)
     result &= foo
 
@@ -388,7 +391,7 @@ template generateIntermediateMacro(name, docs: untyped) =
       checkArgsSym(q.params, args)
       f(db, q, args)
 
-proc `$`(x: TableQuery): string =
+proc `$`*(x: TableQuery): string =
   ## Used for debugging a query, returns the generated SQL
   x.sql
 
