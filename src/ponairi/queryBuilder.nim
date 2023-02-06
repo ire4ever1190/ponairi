@@ -81,12 +81,10 @@ runnableExamples:
   db.insert CartItem(item: "Lamp", cart: int(id))
 
   assert db.find(Customer.where(
-      exists(Cart.where(
-        exists(
-            CartItem.where(item == "Lamp" and cart == Cart.id)
-        )
-      ))
-  )).name == "John Doe"
+      Cart.where(
+        CartItem.where(item == "Lamp" and cart == Cart.id).exists()
+      ).exists())
+  ).name == "John Doe"
 
 type
   TableQuery*[T] = object

@@ -70,7 +70,6 @@ db.insert(Person(name: "Jake", age: 42))
 
 [find] is used for all operations relating to getting objects from a database.
 It uses a type based API where the first parameter (after the db connection) determines the return type.
-Currently most tasks require you to write SQL yourself but this will hopefully change in the future
 
 ```nim
 # Gets the Object we created before
@@ -88,6 +87,9 @@ for person in db.find(seq[Person], sql"SELECT * FROM Person WHERE age > 1"):
 for person in db.find(seq[Person]):
   echo person
 ```
+
+There is also a [query building API](ponairi/queryBuilder.html) that enables type safe query construction for
+simple where statements
 
 #### Update
 
