@@ -267,7 +267,7 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
       result.join ", "
   if primaryKeys.len > 0:
     result.join ", PRIMARY KEY (" & primaryKeys.join(", ") & ")"
-  result.join ") STRICT"
+  result.join ")"
   result = sqlLit(result)
 
 macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =

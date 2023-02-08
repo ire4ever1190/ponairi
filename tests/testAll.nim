@@ -241,7 +241,10 @@ suite "Query builder":
 
   test "Parameters can reuse numbers":
     check db.find(Person.where(name == ?[0, string] and name == ?[0, string]), "Jake") == jake
-
+    check db.find(Person.where(
+      name == ?[0, string] and age == ?[1, int] and
+      name == ?[0, string] and age == ?[1, int]
+    ), "Jake", 42) == jake
   test "Error if parameter is jumping too far ahead":
     check not compiles(Person.where(name == ?[1, string]))
 
