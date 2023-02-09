@@ -99,10 +99,17 @@ proc lookupImpl*(T: NimNode): NimNode =
       echo result.treeRepr
       "Beans misconfigured: Could not look up type".error(T)
 
+macro lookupImpl*(typ: typedesc): NimNode =
+  result = newCall("lookupImpl", typ)
 
-func isOptional*(prop: Property): bool =
+
+func isOptional*(prop: Property | NimNode): bool =
   ## Returns true if the property has an optional type
-  result = prop.typ.kind == nnkBracketExpr and prop.typ[0].eqIdent("Option")
+  when prop is Property:
+    let node = prop.typ
+  else:
+    let node = prop
+  result = node.kind == nnkBracketExpr and node[0].eqIdent("Option")
 
 func isPrimary*(prop: Property): bool =
   ## Returns true if the property is a primary key
@@ -138,3 +145,24 @@ proc getType*(obj: NimNode, property: string | NimNode): Option[NimNode] =
 proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
   ## Returns true if **obj** has **property**
   result = obj.getType(property).isSome
+
+func eqIdent*(name: NimNode | string, idents: openArray[string]): bool =
+  ## Returns true if `name` equals any of the idents.
+  for ident in idents:
+    if name.eqIdent(name):
+      return true
+
+func withArgs*(call, args: NimNode | openArray[NimNode]): NimNode =
+  ## Adds all arguments in `args` to be appended to call
+  result = call
+  for arg in args:
+    call &= arg
+
+func newBlockExpr*(body: varargs[NimNode]): NimNode =
+  ## Creates a new block expression using the nodes in `body` as the statement list
+  # Is called newBlockExpr instead of newBlockStmt so that it isn't confused with
+  # the overload that takes label + body
+  var bodyItems = newStmtList()
+  for item in body:
+    bodyItems &= item
+  result = newBlockStmt(bodyItems)

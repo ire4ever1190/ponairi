@@ -2,7 +2,8 @@ import std/[
   unittest,
   options,
   times,
-  strformat
+  strformat,
+  algorithm
 ]
 import ponairi
 
@@ -45,6 +46,8 @@ const
   john = Person(name: "John", age: 45, status: Dead, extraInfo: some "Test")
   people = [jake, john]
 
+proc `<`(a, b: Person): bool =
+  a.age < b.age
 
 let jakesDogs = [
   Dog(owner: "Jake", name: "Dog"),
@@ -264,3 +267,39 @@ suite "Query builder":
     check db.find(seq[Person]) == @[john]
     db.insert(jake)
 
+  template everybody(): TableQuery = seq[Person].where()
+  test "Can set order of query":
+    check db
+      .find(everybody().orderBy(Ascending(age)))
+      .isSorted(Ascending)
+
+    check db
+      .find(everybody().orderBy(Descending(age)))
+      .isSorted(Descending)
+
+  test "Can set null order":
+    check db
+      .find(everybody().orderBy(NullsFirst(extraInfo)))[0]
+      .extraInfo.isNone()
+
+    check db
+      .find(everybody().orderBy(NullsLast(extraInfo)))[0]
+      .extraInfo.isSome()
+
+  test "Can only use null order on nullable column":
+    check not compiles(everybody().orderBy(NullsFirst(age)))
+
+  test "orderBy checks column exists":
+    check not compiles(everybody().orderBy(Descending(notFound)))
+
+  test "Test different order call methods":
+    check not compiles(everybody().orderBy(something))
+    check not compiles(everybody().orderBy(Null(age)))
+    check not compiles(everybody().orderBy(Last()))
+    check not compiles(everybody().orderBy(NullsFirst))
+    check not compiles(everybody().orderBy(NullsFirst()))
+
+    check compiles(everybody().orderBy(Ascending(age)))
+    check compiles(everybody().orderBy(Ascending age))
+    check compiles(everybody().orderBy(age.Ascending))
+    check compiles(everybody().orderBy(age.Ascending()))

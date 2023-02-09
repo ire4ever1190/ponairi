@@ -87,6 +87,13 @@ runnableExamples:
   ).name == "John Doe"
 
 type
+  SortOrder* = enum
+    ## How should SQLite sort the column
+    Ascending
+    Descending
+    NullsFirst
+    NullsLast
+
   TableQuery*[T] = object
     ## This is a full query. Stores information about the main table it is trying to access,
     ## what the SQL to run is, and what parameters it has
@@ -94,6 +101,7 @@ type
     # Sequence of types for the parameters
     # Was too much of a pain to move around NimNodes
     params: seq[string]
+    order: seq[tuple[column: string, order: SortOrder]]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
@@ -107,6 +115,29 @@ func tableName[T](x: typedesc[seq[T]]): string =
 
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
+
+func buildOrderBy*(table: TableQuery): string =
+  ## Returns the ORDER BY clause
+  runnableExamples:
+    type Person = object
+      name: string
+      age: int
+    const query = seq[Person].where().orderBy(Ascending(name), Descending(age))
+    assert query.buildOrderBy() == "name ASC, age DESC"
+  #==#
+  if table.order.len > 0:
+    result = "ORDER BY "
+    # We can't set the string directly on the enum
+    # since that would mess up the parseEnum call
+    const toStr: array[SortOrder, string] = [
+      "ASC",
+      "DESC",
+      "NULLS FIRST",
+      "NULLS LAST"
+    ]
+    # TODO: Seperate order items by ","
+    for order in table.order:
+      result &= fmt"{order.column} {toStr[order.order]}"
 
 #
 # Functions that build the query
@@ -337,35 +368,97 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
   var params: seq[string]
   let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
+  # Boolean literals aren't allowed to be the entire query
+  # Realised this would compile, but fail at runtime when trying to do Type.where(true)
+  if query.kind == nnkIdent and query.eqIdent(["true", "false"]):
+    "Query cannot be a single boolean value".error(query)
   # Move the parameters into a node that we can pass into the second call
   result = newCall(bindSym"whereImpl", table, queryNodes, newLit params)
+
+func where*[T](table: typedesc[T]): TableQuery[T] =
+  ## Create a where statement that matches anything
+  result = TableQuery[T](sql: "1 == 1")
+
+func normaliseCall(node: NimNode): NimNode =
+  ## Normalises
+  ## - something.proc()
+  ## - proc something
+  ## - something.proc
+  ## into proc(something)
+  ##
+  ## If the node passed is not a call then it just returns
+  case node.kind:
+  of nnkCall:
+    if node[0].kind == nnkDotExpr:
+      result = normaliseCall(node[0])
+      # Add rest of the arguments
+      if node.len > 1:
+        for arg in node[1 ..< ^1]:
+          result &= arg
+    else:
+      result = node
+  of nnkDotExpr:
+    # We just need to swap the nodes
+    result = nnkCall.newTree(node[1], node[0])
+  else:
+    result = node
+
+macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
+                     order: varargs[untyped]): TableQuery[T] =
+  ## This is the actual implementation of orderBy. The only difference is that it takes
+  ## a typedesc parameter so I can actually lookup the table parameters
+  let tableName = tableTyp.lookupImpl().getNameSym()
+  let orderList = collect:
+    for node in order:
+      let call = normaliseCall(node)
+      if call.kind notin {nnkCall, nnkCommand}:
+        "Order must be specified like SortOrder(column)".error(node)
+      elif not tableName.hasProperty(call[1]):
+        fmt"{call[1]} doesn't exist in {tableName}".error(table)
+      # Check the column exists
+      # Find which sort order they are looking for
+      var sortOrder: SortOrder
+      try:
+        sortOrder = parseEnum[SortOrder](call[0].strVal)
+      except ValueError:
+        fmt"Invalid order: {node[0]}".error(node)
+      # Check if type can actually be nullable
+      if sortOrder in {NullsFirst, NullsLast}:
+        # We already checked the property exists, so we can safely get it
+        let typ = tableName.getType(call[1]).get()
+        if not typ.isOptional:
+          fmt"{call[1]} is not nullable".error(node)
+      # Add the order to the list
+      (call[1].strVal, sortOrder)
+  # Generate code to add the items to the order
+  result = genAst(table, items = newLit(orderList), lookupSym = bindSym"lookupImpl"):
+    # Create copy we can edit (Since it might just be a whereImpl call)
+    # Then append the order
+    var x = table
+    x.order &= items
+    x
+
+macro orderBy*[T: seq](table: TableQuery[T], order: varargs[untyped]): TableQuery[T] =
+  # Build query manually so that the line info stays correct
+  let tmp = ident"tmp"
+  tmp.copyLineInfo(table)
+  # Build call with varargs added on
+  var call = newCall(bindSym"orderByImpl", newDotExpr(tmp, ident"T"), tmp)
+  for arg in order:
+    call &= arg
+  result = newBlockExpr(
+      newLetStmt(ident"tmp", table),
+      call
+  )
 
 #
 # Overloads to use TableQuery
 #
 
-macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
-  ## Generates a series of checks to make sure the args types are correct
-  if types.len != args.len:
-    fmt"Got {args.len} arguments but expected {types.len}".error(args)
-  result = newStmtList()
-  for i in 0..<args.len:
-    let arg = args[i]
-    let foo = genAst(typ = parseExpr types[i], arg, i):
-      when typeof(arg) isnot typ:
-        {.error: "Expected " & $typ & " but got " & $typeof(arg) & " for argument " & $i.}
-
-    when declared(macros.setLineInfo):
-      # We want the error message to point to where the user is calling the query so we need to set it.
-      let info = args.lineInfoObj
-      # Set the line info of the error pragma
-      foo[0][1][0][0].setLineInfo(args.lineInfoObj)
-    result &= foo
-
 proc findImpl[T](db; q: static[TableQuery[T]], args): T {.inline.} =
   const
     table = T.tableName
-    query = sql fmt"SELECT * FROM {table} WHERE {q.sql}"
+    query = sql fmt"SELECT * FROM {table} WHERE {q.sql} {q.buildOrderBy()}"
   db.find(T, query, args)
 
 proc existsImpl[T](db; q: static[TableQuery[T]], args): bool =
@@ -380,6 +473,24 @@ proc deleteImpl[T](db; q: static[TableQuery[T]], args) =
     query = sql fmt"DELETE FROM {table} WHERE {q.sql}"
   db.exec(query, args)
 
+macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
+  ## Generates a series of checks to make sure the args types are correct
+  if types.len != args.len:
+    fmt"Got {args.len} arguments but expected {types.len}".error(args)
+  result = newStmtList()
+  for i in 0..<args.len:
+    let arg = args[i]
+    let info = arg.lineInfoObj
+    let foo = genAst(typ = parseExpr types[i], arg, i):
+      when typeof(arg) isnot typ:
+        {.error: "Expected " & $typ & " but got " & $typeof(arg) & " for argument " & $i.}
+
+    when declared(macros.setLineInfo):
+      # We want the error message to point to where the user is calling the query (Instead of pointing to here)
+      foo[0][1][0][0].setLineInfo(info)
+    result &= foo
+
+
 template generateIntermediateMacro(name, docs: untyped) =
   ## We need to have a macro that checks the types and then passes it off to the actual proc.
   ## This just removes the boiler plate of having to write that macro for each proc
@@ -388,13 +499,20 @@ template generateIntermediateMacro(name, docs: untyped) =
     # When we get a query we perform two steps
     # - Check the arguments are correct (types, number of args)
     # - Then run the query
-    #
     let
-      checkArgsSym = bindSym"checkArgs"
       f = bindSym(astToStr(name) & "impl")
-    result = genAst(db, q, args, checkArgsSym, f):
-      checkArgsSym(q.params, args)
-      f(db, q, args)
+      # Make temp variable incase TableQuery is a call and not a value
+      tmp = ident"tmp"
+    tmp.copyLineInfo(q)
+    # Build manually so errors point to correct lines
+    result = newBlockExpr(
+      # Needs to be static so checkArgs can get the values
+      newConstStmt(tmp, q),
+      # Call to heck the arguments passed are correct
+      newCall(bindSym"checkArgs", newDotExpr(tmp, ident"params")).withArgs(args),
+      # Call to the actual function
+      newCall(f, db, tmp).withArgs(args)
+    )
 
 proc `$`*(x: TableQuery): string =
   ## Used for debugging a query, returns the generated SQL
