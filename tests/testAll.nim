@@ -303,3 +303,7 @@ suite "Query builder":
     check compiles(everybody().orderBy(Ascending age))
     check compiles(everybody().orderBy(age.Ascending))
     check compiles(everybody().orderBy(age.Ascending()))
+
+  test "Multiple orderings can be passed":
+    # More just checking the query actually runs, I trust sqlite to work
+    discard db.find everybody().orderBy(Ascending(age), Descending(name))

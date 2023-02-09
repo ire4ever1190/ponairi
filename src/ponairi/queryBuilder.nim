@@ -10,7 +10,7 @@ import std/[
   genasts
 ]
 
-import macroUtils
+import macroUtils, utils
 
 ##[
 
@@ -86,6 +86,19 @@ runnableExamples:
       ).exists())
   ).name == "John Doe"
 
+  # We can also order the fields
+
+  # This will be used to check it is sorted, not needed for functionality
+  import std/algorithm
+  func `<`(a, b: Item): bool =
+    a.price < b.price
+  # Add some more items
+  db.insert Item(name: "Table", price: 10.0)
+  db.insert Item(name: "Chair", price: 5.0)
+  # We pass the ordering to orderBy, multiple orderings can be passed
+  # i.e. sort by first parameter, then by second if any are equal, ..., etc
+  assert db.find(Item.where().orderBy(Ascending(name))).isSorted()
+
 type
   SortOrder* = enum
     ## How should SQLite sort the column
@@ -126,7 +139,6 @@ func buildOrderBy*(table: TableQuery): string =
     assert query.buildOrderBy() == "name ASC, age DESC"
   #==#
   if table.order.len > 0:
-    result = "ORDER BY "
     # We can't set the string directly on the enum
     # since that would mess up the parseEnum call
     const toStr: array[SortOrder, string] = [
@@ -135,10 +147,9 @@ func buildOrderBy*(table: TableQuery): string =
       "NULLS FIRST",
       "NULLS LAST"
     ]
-    # TODO: Seperate order items by ","
-    for order in table.order:
-      result &= fmt"{order.column} {toStr[order.order]}"
-
+    result = "ORDER BY "
+    result.add table.order.seperateBy(", ") do (x: auto) -> string:
+      fmt"{x.column} {toStr[x.order]}"
 #
 # Functions that build the query
 #
@@ -184,10 +195,6 @@ func `~=`*(a, pattern: QueryPart[string]): QueryPart[bool] =
   ## - `_`: Matches a single character
   result = QueryPart[bool](fmt"{a.string} LIKE {pattern.string}")
 
-func sqlLit(x: string): string = fmt"'{x}'"
-func sqlLit(x: SomeNumber): string = $x
-func sqlLit(x: bool): string = (if x: "TRUE" else: "FALSE")
-
 func exists*[T](q: TableQuery[T]): QueryPart[bool] =
   ## Implements `EXISTS()` for the query builder
   const table = T.tableName
@@ -228,10 +235,7 @@ using args: varargs[DbValue, dbValue]
 
 func initQueryPartNode(x: NimNode, val: string): NimNode =
   ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
-  when x is NimNode:
-    let typ = x
-  else:
-    let typ = ident $T
+  let typ = x
   nnkCall.newTree(
     nnkBracketExpr.newTree(ident"QueryPart", typ),
     newLit val
