@@ -7,6 +7,9 @@ import std/[
 ]
 import ponairi
 
+when (NimMajor, NimMinor) < (1, 7):
+  {.experimental: "overloadableEnums".}
+
 type
   Status = enum
     Alive
