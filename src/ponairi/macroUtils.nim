@@ -130,7 +130,6 @@ proc getType*(obj: NimNode, property: string | NimNode): Option[NimNode] =
   ## Returns the type for a property if it exists
   let key = obj.strVal
   if key in properties:
-    echo properties[key].treeRepr
     for prop in properties[key]:
       if prop[0].eqIdent(property):
         return some prop[1]
@@ -167,7 +166,7 @@ func newBlockExpr*(body: varargs[NimNode]): NimNode =
 proc error*(msg: string, line: LineInfo) =
   ## Sets an error to be on a specific line
   let tmp = newEmptyNode()
-  when defined(macros.setLineInfo):
+  when declared(macros.setLineInfo):
     tmp.setLineInfo(line)
   msg.error(tmp)
 
