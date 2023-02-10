@@ -99,10 +99,6 @@ proc lookupImpl*(T: NimNode): NimNode =
       echo result.treeRepr
       "Beans misconfigured: Could not look up type".error(T)
 
-macro lookupImpl*(typ: typedesc): NimNode =
-  result = newCall("lookupImpl", typ)
-
-
 func isOptional*(prop: Property | NimNode): bool =
   ## Returns true if the property has an optional type
   when prop is Property:
@@ -134,6 +130,7 @@ proc getType*(obj: NimNode, property: string | NimNode): Option[NimNode] =
   ## Returns the type for a property if it exists
   let key = obj.strVal
   if key in properties:
+    echo properties[key].treeRepr
     for prop in properties[key]:
       if prop[0].eqIdent(property):
         return some prop[1]
@@ -166,3 +163,16 @@ func newBlockExpr*(body: varargs[NimNode]): NimNode =
   for item in body:
     bodyItems &= item
   result = newBlockStmt(bodyItems)
+
+proc error*(msg: string, line: LineInfo) =
+  ## Sets an error to be on a specific line
+  let tmp = newEmptyNode()
+  when defined(macros.setLineInfo):
+    tmp.setLineInfo(line)
+  msg.error(tmp)
+
+func newLit*[T](x: openArray[T]): NimNode =
+  var items = nnkBracket.newTree()
+  for item in x:
+    items &= newLit item
+  result = items.prefix("@")

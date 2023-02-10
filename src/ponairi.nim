@@ -576,4 +576,4 @@ export hasCustomPragma # Wouldn't bind
 export replace
 export queryBuilder
 export pragmas
-export sqlite except `?`
+export sqlite

@@ -19,14 +19,14 @@ import macroUtils, utils
   Query builder that can be used to make type safe queries.
   This doesn't aim to replace SQL and so certain situations will still require you to write SQL.
 
-  The query building is done with the [where] macro which takes a Table (which will be the expected return type) and a Nim expression.
+  The query building is done with the [where][where(table)] macro which takes a Table (which will be the expected return type) and a Nim expression.
   The Nim expression is checked at compile time and then converted into SQL and so only the raw SQL string is stored. This means that there
   is no runtime overhead when using the query builder.
 
   Supported procedures are
-  - [find]
-  - [delete]
-  - [exists]
+  - [find][find]
+  - [delete][delete]
+  - [exists][exists]
 ]##
 
 runnableExamples:
@@ -89,7 +89,7 @@ runnableExamples:
   # We can also order the fields
 
   # This will be used to check it is sorted, not needed for functionality
-  import std/algorithm
+  import std/algorithm except SortOrder
   func `<`(a, b: Item): bool =
     a.price < b.price
   # Add some more items
@@ -97,7 +97,7 @@ runnableExamples:
   db.insert Item(name: "Chair", price: 5.0)
   # We pass the ordering to orderBy, multiple orderings can be passed
   # i.e. sort by first parameter, then by second if any are equal, ..., etc
-  assert db.find(Item.where().orderBy(Ascending(name))).isSorted()
+  assert db.find(seq[Item].where().orderBy(asc name)).isSorted()
 
 type
   SortOrder* = enum
@@ -107,6 +107,12 @@ type
     NullsFirst
     NullsLast
 
+  ColumnOrder = object
+    ## Info about an ordering
+    column*: string
+    order*: SortOrder
+    line: LineInfo
+
   TableQuery*[T] = object
     ## This is a full query. Stores information about the main table it is trying to access,
     ## what the SQL to run is, and what parameters it has
@@ -114,7 +120,7 @@ type
     # Sequence of types for the parameters
     # Was too much of a pain to move around NimNodes
     params: seq[string]
-    order: seq[tuple[column: string, order: SortOrder]]
+    order: seq[ColumnOrder]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
@@ -129,14 +135,30 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
 
+template makeOrder(name: untyped, ord: SortOrder, docs: untyped) =
+  template name*(col: untyped): ColumnOrder =
+    docs
+    ColumnOrder(column: astToStr(col), order: ord, line: currentLine())
+
+makeOrder(asc, Ascending):
+  ## Make a column be in ascending order
+makeOrder(desc, Descending):
+  ## Make a column be in descending order
+makeOrder(nullsFirst, NullsFirst):
+  ## Makes `nil` values get returned first.
+  ## Column must be optional
+makeOrder(nullsLast, NullsLast):
+  ## Makes `nil` values get returned last
+  ## Column must be optional
+
 func buildOrderBy*(table: TableQuery): string =
   ## Returns the ORDER BY clause
   runnableExamples:
     type Person = object
       name: string
       age: int
-    const query = seq[Person].where().orderBy(Ascending(name), Descending(age))
-    assert query.buildOrderBy() == "name ASC, age DESC"
+    const query = seq[Person].where().orderBy(asc name, desc age)
+    assert query.buildOrderBy() == "ORDER BY name ASC, age DESC"
   #==#
   if table.order.len > 0:
     # We can't set the string directly on the enum
@@ -408,32 +430,22 @@ func normaliseCall(node: NimNode): NimNode =
     result = node
 
 macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
-                     order: varargs[untyped]): TableQuery[T] =
+                     orderList: static[openArray[ColumnOrder]]): TableQuery[T] =
   ## This is the actual implementation of orderBy. The only difference is that it takes
   ## a typedesc parameter so I can actually lookup the table parameters
   let tableName = tableTyp.lookupImpl().getNameSym()
-  let orderList = collect:
-    for node in order:
-      let call = normaliseCall(node)
-      if call.kind notin {nnkCall, nnkCommand}:
-        "Order must be specified like SortOrder(column)".error(node)
-      elif not tableName.hasProperty(call[1]):
-        fmt"{call[1]} doesn't exist in {tableName}".error(table)
-      # Check the column exists
-      # Find which sort order they are looking for
-      var sortOrder: SortOrder
-      try:
-        sortOrder = parseEnum[SortOrder](call[0].strVal)
-      except ValueError:
-        fmt"Invalid order: {node[0]}".error(node)
-      # Check if type can actually be nullable
-      if sortOrder in {NullsFirst, NullsLast}:
-        # We already checked the property exists, so we can safely get it
-        let typ = tableName.getType(call[1]).get()
-        if not typ.isOptional:
-          fmt"{call[1]} is not nullable".error(node)
-      # Add the order to the list
-      (call[1].strVal, sortOrder)
+  # Check the ordering is valid
+  for order in orderList:
+    if not tableName.hasProperty(order.column):
+      fmt"{order.column} doesn't exist in {tableName}".error(table)
+
+    # Check if type can actually be nullable
+    if order.order in {NullsFirst, NullsLast}:
+      # We already checked the property exists, so we can safely get it
+      let typ = tableName.getType(order.column).get()
+      if not typ.isOptional:
+        fmt"{order.column} is not nullable".error(order.line)
+
   # Generate code to add the items to the order
   result = genAst(table, items = newLit(orderList), lookupSym = bindSym"lookupImpl"):
     # Create copy we can edit (Since it might just be a whereImpl call)
@@ -442,14 +454,18 @@ macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
     x.order &= items
     x
 
-macro orderBy*[T: seq](table: TableQuery[T], order: varargs[untyped]): TableQuery[T] =
+proc orderBy*[T: not seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] {.error: "orderBy only works on seq[T]".}
+
+macro orderBy*[T: seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] =
   # Build query manually so that the line info stays correct
   let tmp = ident"tmp"
   tmp.copyLineInfo(table)
   # Build call with varargs added on
   var call = newCall(bindSym"orderByImpl", newDotExpr(tmp, ident"T"), tmp)
+  var orderArr = nnkBracket.newTree()
   for arg in order:
-    call &= arg
+    orderArr &= arg
+  call &= orderArr
   result = newBlockExpr(
       newLetStmt(ident"tmp", table),
       call

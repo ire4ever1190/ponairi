@@ -273,40 +273,28 @@ suite "Query builder":
   template everybody(): TableQuery = seq[Person].where()
   test "Can set order of query":
     check db
-      .find(everybody().orderBy(Ascending(age)))
+      .find(everybody().orderBy(asc age))
       .isSorted(Ascending)
 
     check db
-      .find(everybody().orderBy(Descending(age)))
+      .find(everybody().orderBy(desc age))
       .isSorted(Descending)
 
   test "Can set null order":
     check db
-      .find(everybody().orderBy(NullsFirst(extraInfo)))[0]
+      .find(everybody().orderBy(nullsFirst extraInfo))[0]
       .extraInfo.isNone()
 
     check db
-      .find(everybody().orderBy(NullsLast(extraInfo)))[0]
+      .find(everybody().orderBy(nullsLast extraInfo))[0]
       .extraInfo.isSome()
 
   test "Can only use null order on nullable column":
-    check not compiles(everybody().orderBy(NullsFirst(age)))
+    check not compiles(everybody().orderBy(nullsFirst age))
 
   test "orderBy checks column exists":
-    check not compiles(everybody().orderBy(Descending(notFound)))
-
-  test "Test different order call methods":
-    check not compiles(everybody().orderBy(something))
-    check not compiles(everybody().orderBy(Null(age)))
-    check not compiles(everybody().orderBy(Last()))
-    check not compiles(everybody().orderBy(NullsFirst))
-    check not compiles(everybody().orderBy(NullsFirst()))
-
-    check compiles(everybody().orderBy(Ascending(age)))
-    check compiles(everybody().orderBy(Ascending age))
-    check compiles(everybody().orderBy(age.Ascending))
-    check compiles(everybody().orderBy(age.Ascending()))
+    check not compiles(everybody().orderBy(desc notFound))
 
   test "Multiple orderings can be passed":
     # More just checking the query actually runs, I trust sqlite to work
-    discard db.find everybody().orderBy(Ascending(age), Descending(name))
+    discard db.find everybody().orderBy(asc age, desc name)

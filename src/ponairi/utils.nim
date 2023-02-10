@@ -1,3 +1,5 @@
+import macros
+
 func seperateBy*[T](items: openArray[T], sep: string,
                    handler: proc (x: T): string): string {.effectsOf: handler.} =
   ## Runs `handler` on every `item` and seperates all the items.
@@ -6,3 +8,9 @@ func seperateBy*[T](items: openArray[T], sep: string,
     result &= handler(items[i])
     if i < items.len - 1:
       result &= sep
+
+template currentLine*(): LineInfo =
+  ## Returns the current line as a LineInfo
+  block:
+    let pos = instantiationInfo(fullPaths = true)
+    LineInfo(filename: pos.filename, line: pos.line, column: pos.column)
