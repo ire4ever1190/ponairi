@@ -299,3 +299,16 @@ suite "Query builder":
   test "Multiple orderings can be passed":
     # More just checking the query actually runs, I trust sqlite to work
     discard db.find everybody().orderBy(asc age, desc name)
+
+  test "Works in overloaded templates":
+    # This was a weird bug I found which was causing problems when used in async (Due to a feature I implemented funnyily enough)
+    # Not an issue with async, but for some reason overloaded templates in general caused issues.
+    #
+    # For future reference in case this ever pops up again:
+    # The problem was me assigning the query to a temporary const, not doing that fixed it (Guessing it was some weird sem matching problem)
+    template foo(x: string) =
+      echo x
+    template foo(x: untyped) =
+      discard x
+    foo:
+      db.find(Person.where())

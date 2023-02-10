@@ -369,9 +369,11 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
     for i in 0..<node.len:
       result[i] = result[i].checkSymbols(currentTable, scope, params)
 
-proc whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray[string]): TableQuery[T] =
+func whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray[string]): TableQuery[T] =
   ## This is the internal proc that forces the query to be compiled
-  result = TableQuery[T](sql: query.string, params: @params)
+  result.sql = query.string
+  for i in params:
+    result.params &= i
 
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   ## Use this macro for genearting queries.
@@ -400,8 +402,7 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   if query.kind == nnkIdent and query.eqIdent(["true", "false"]):
     "Query cannot be a single boolean value".error(query)
   # Move the parameters into a node that we can pass into the second call
-  result = newCall(bindSym"whereImpl", table, queryNodes, newLit params)
-  echo result.toStrLit
+  result = newCall(bindSym"whereImpl", table, queryNodes, newLit(params)[1])
 
 func where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
@@ -530,13 +531,12 @@ template generateIntermediateMacro(name, docs: untyped) =
       tmp = ident"tmp"
     tmp.copyLineInfo(q)
     # Build manually so errors point to correct lines
+    # TODO: Create a temp so that we aren't generating the query twice (See test 'Works in overloaded templates')
     result = newBlockExpr(
-      # Needs to be static so checkArgs can get the values
-      newConstStmt(tmp, q),
       # Call to heck the arguments passed are correct
-      newCall(bindSym"checkArgs", newDotExpr(tmp, ident"params")).withArgs(args),
+      newCall(bindSym"checkArgs", newDotExpr(q, ident"params")).withArgs(args),
       # Call to the actual function
-      newCall(f, db, tmp).withArgs(args)
+      newCall(f, db, q).withArgs(args)
     )
 
 proc `$`*(x: TableQuery): string =
