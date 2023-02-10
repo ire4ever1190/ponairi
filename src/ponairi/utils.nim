@@ -12,5 +12,5 @@ func seperateBy*[T](items: openArray[T], sep: string,
 template currentLine*(): LineInfo =
   ## Returns the current line as a LineInfo
   block:
-    let pos = instantiationInfo(fullPaths = true)
+    const pos = instantiationInfo(-2, fullPaths = true)
     LineInfo(filename: pos.filename, line: pos.line, column: pos.column)

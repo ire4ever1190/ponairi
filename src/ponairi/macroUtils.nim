@@ -126,26 +126,35 @@ proc registerTable*(obj: NimNode) =
     props &= newIdentDefs(ident properties.name, properties.typ)
   properties[obj.strVal] = props
 
-proc getType*(obj: NimNode, property: string | NimNode): Option[NimNode] =
+using obj: NimNode | string
+
+proc getType*(obj; property: string | NimNode): Option[NimNode] =
   ## Returns the type for a property if it exists
-  let key = obj.strVal
+  when obj is NimNode:
+    let key = obj.strVal
+  else:
+    let key = obj
+  bind items
   if key in properties:
-    for prop in properties[key]:
+    for prop in properties[key].items:
       if prop[0].eqIdent(property):
         return some prop[1]
   else:
-    # TODO: Add parameter to stop infinite recursion
-    registerTable(obj)
-    result = obj.getType(property)
+    when obj is NimNode:
+      # TODO: Add parameter to stop infinite recursion
+      registerTable(obj)
+      result = obj.getType(property)
+    else:
+      error("Make sure you have used create to register the table with ponairi")
 
-proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
+proc hasProperty*(obj; property: string | NimNode): bool =
   ## Returns true if **obj** has **property**
   result = obj.getType(property).isSome
 
 func eqIdent*(name: NimNode | string, idents: openArray[string]): bool =
   ## Returns true if `name` equals any of the idents.
   for ident in idents:
-    if name.eqIdent(name):
+    if name.eqIdent(ident):
       return true
 
 func withArgs*(call, args: NimNode | openArray[NimNode]): NimNode =

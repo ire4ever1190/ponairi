@@ -116,11 +116,11 @@ type
   TableQuery*[T] = object
     ## This is a full query. Stores information about the main table it is trying to access,
     ## what the SQL to run is, and what parameters it has
-    sql: string
+    sql*: string
     # Sequence of types for the parameters
     # Was too much of a pain to move around NimNodes
-    params: seq[string]
-    order: seq[ColumnOrder]
+    params*: seq[string]
+    order*: seq[ColumnOrder]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
@@ -266,7 +266,8 @@ func initQueryPartNode(x: NimNode, val: string): NimNode =
 func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
-proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], params: var seq[string]): NimNode =
+proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
+                  params: var seq[string]): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
@@ -274,7 +275,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode], par
   result = node
   case node.kind
   of nnkIdent, nnkSym:
-    if node.eqIdent("true") or node.eqIdent("false"):
+    if node.eqIdent(["true", "false"]):
       # We technically could use TRUE and FALSE
       return initQueryPartNode(bool, $int(node.boolVal))
     else:
@@ -400,6 +401,7 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
     "Query cannot be a single boolean value".error(query)
   # Move the parameters into a node that we can pass into the second call
   result = newCall(bindSym"whereImpl", table, queryNodes, newLit params)
+  echo result.toStrLit
 
 func where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
@@ -430,7 +432,7 @@ func normaliseCall(node: NimNode): NimNode =
     result = node
 
 macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
-                     orderList: static[openArray[ColumnOrder]]): TableQuery[T] =
+                     orderList: static[seq[ColumnOrder]]): TableQuery[T] =
   ## This is the actual implementation of orderBy. The only difference is that it takes
   ## a typedesc parameter so I can actually lookup the table parameters
   let tableName = tableTyp.lookupImpl().getNameSym()
@@ -456,21 +458,24 @@ macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
 
 proc orderBy*[T: not seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] {.error: "orderBy only works on seq[T]".}
 
-macro orderBy*[T: seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] =
+proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): TableQuery[T] =
   # Build query manually so that the line info stays correct
-  let tmp = ident"tmp"
-  tmp.copyLineInfo(table)
-  # Build call with varargs added on
-  var call = newCall(bindSym"orderByImpl", newDotExpr(tmp, ident"T"), tmp)
-  var orderArr = nnkBracket.newTree()
-  for arg in order:
-    orderArr &= arg
-  call &= orderArr
-  result = newBlockExpr(
-      newLetStmt(ident"tmp", table),
-      call
-  )
+  let obj = T.tableName()
+  result = table
+  # Check the ordering is valid
+  for order in sortings:
+    echo obj.hasProperty(order.column)
+    if not obj.hasProperty(order.column):
+      fmt"{order.column} doesn't exist in {obj}".error(order.line)
 
+    # Check if type can actually be nullable
+    if order.order in {NullsFirst, NullsLast}:
+      # We already checked the property exists, so we can safely get it
+      let typ = obj.getType(order.column).get()
+      if not typ.isOptional:
+        fmt"{order.column} is not nullable".error(order.line)
+
+    result.order &= order
 #
 # Overloads to use TableQuery
 #
