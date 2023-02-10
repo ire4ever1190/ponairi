@@ -17,6 +17,12 @@ type
     # I don't think a person will have too many pragmas so a seq should be fine for now
     pragmas*: seq[Pragma]
 
+const identNodes = {nnkIdent, nnkSym}
+
+func isIdent(x: NimNode): bool =
+  ## Returns if the node is an ident type (See identNodes)
+  x.kind in identNodes
+
 when not declared(macrocache.contains):
   # Naive version for when on old versions of Nim
   proc contains*(t: CacheTable, key: string): bool =
@@ -58,6 +64,8 @@ proc getNameSym*(n: NimNode): NimNode =
   of nnkPostFix:
     result = n[1].getNameSym()
   of nnkTypeDef:
+    result = n[0].getNameSym()
+  of nnkPragmaExpr:
     result = n[0].getNameSym()
   else:
     echo n.treeRepr
@@ -115,16 +123,20 @@ const properties = CacheTable"ponairi.properties"
 
 proc registerTable*(obj: NimNode) =
   ## Adds a tables properties to the properties cache table
-  if obj.strVal in properties:
-    return
   var props = newStmtList()
+  # Find the type def
+  let impl = if obj.isIdent():
+      if obj.strVal in properties: return
+      obj.lookupImpl()
+    else:
+      obj
   # Convert the properties to identDefs and save in the table.
   # This is still better than accessing the object raw since it means properties like
   # a, b, c: int
   # are normalised into a: int, b: int, c: int which means less checking later
-  for properties in obj.lookupImpl().getProperties():
+  for properties in impl.getProperties():
     props &= newIdentDefs(ident properties.name, properties.typ)
-  properties[obj.strVal] = props
+  properties[if obj.isIdent: obj.strVal else: obj.getName()] = props
 
 using obj: NimNode | string
 

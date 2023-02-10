@@ -152,11 +152,16 @@ makeOrder(nullsLast, NullsLast):
   ## Column must be optional
 
 func buildOrderBy*(table: TableQuery): string =
-  ## Returns the ORDER BY clause
+  ## Returns the ORDER BY clause. You probably won't need to use this
+  ## But will be useful if you want to create your own functions
   runnableExamples:
-    type Person = object
-      name: string
-      age: int
+    import ponairi
+
+    type
+      Person {.table.} = object
+        name: string
+        age: int
+
     const query = seq[Person].where().orderBy(asc name, desc age)
     assert query.buildOrderBy() == "ORDER BY name ASC, age DESC"
   #==#
