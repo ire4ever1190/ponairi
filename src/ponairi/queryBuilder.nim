@@ -111,7 +111,7 @@ type
     ## Info about an ordering
     column*: string
     order*: SortOrder
-    line: LineInfo
+    line: LineInfo # Store line info so error messages are better later
 
   TableQuery*[T] = object
     ## This is a full query. Stores information about the main table it is trying to access,
@@ -142,11 +142,14 @@ template makeOrder(name: untyped, ord: SortOrder, docs: untyped) =
 
 makeOrder(asc, Ascending):
   ## Make a column be in ascending order
+
 makeOrder(desc, Descending):
   ## Make a column be in descending order
+
 makeOrder(nullsFirst, NullsFirst):
   ## Makes `nil` values get returned first.
   ## Column must be optional
+
 makeOrder(nullsLast, NullsLast):
   ## Makes `nil` values get returned last
   ## Column must be optional
@@ -227,6 +230,14 @@ func exists*[T](q: TableQuery[T]): QueryPart[bool] =
   const table = T.tableName
   result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)")
 
+func get*[T](q: QueryPart[Option[T]], default: QueryPart[T]): QueryPart[T] =
+  ## Trys to get the value from the column but returns default if its `none(T)`
+  result = QueryPart[T](fmt"COALESCE({q.string}, {default.string})")
+
+func unsafeGet*[T](q: QueryPart[Option[T]]): QueryPart[T] =
+  ## Just converts the type from `Option[T]` to `T`, doesn't do any actual SQL
+  result = QueryPart[T](q.string)
+
 func isSome*(q: QueryPart[Option[auto]]): QueryPart[bool] =
   ## Checks if a column is not null
   result = QueryPart[bool](fmt"{q.string} IS NULL")
@@ -238,10 +249,8 @@ func isNone*(q: QueryPart[Option[auto]]): QueryPart[bool] =
 func contains*[T](items: openArray[QueryPart[T]], q: QueryPart[T]): QueryPart[bool] =
   ## Checks if a value is in an array of values
   var sqlArray = "("
-  for i in 0..<items.len:
-    sqlArray &= q.string
-    if i < items.len - 1:
-      sqlArray &= ", "
+  sqlArray.add items.seperateBy(", ") do (item: auto) -> string:
+    item.string
   sqlArray &= ")"
   result = QueryPart[bool](fmt"{q.string} IN {sqlArray}")
 
@@ -276,7 +285,10 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
-  ##
+  template checkAfter(start: int) =
+    ## Checks the rest of the nodes starting with `start`
+    for i in start..<node.len:
+        result[i] = result[i].checkSymbols(currentTable, scope, params)
   result = node
   case node.kind
   of nnkIdent, nnkSym:
@@ -332,9 +344,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
         function = node[0][1]
       result[0] = function
       result.insert(1, firstParam)
-
-    for i in 1..<result.len:
-      result[i] = result[i].checkSymbols(currentTable, scope, params)
+    checkAfter(1)
   of nnkPrefix:
     if node[0].eqIdent("?"):
       # ? parameters need to be implemented like this so we can keep track of the
@@ -345,6 +355,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       var
         pos: BiggestInt = params.len
         typ: NimNode
+      # Find the type and optional size
       case param.kind
       of nnkIdent, nnkSym:
         typ = ident param.strVal
@@ -360,19 +371,19 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
         typ = param[1]
       else:
         usageMsg.error(node)
+      # Check the position is valid
       if pos == params.len:
         params.insert(repr typ, pos)
       elif pos > params.len:
         "Invalid position for parameter".error(param)
       elif repr(typ) != params[pos]:
         fmt"Parameter at index {pos} is {params[pos]} but you tried to override with {typ}".error(param)
+
       result = initQueryPartNode(typ, "?" & $(pos + 1)) # SQLite parameters are 1 indexed
     else:
-      for i in 1..<node.len: # We can ignore the first node, Nim will check it later
-        result[i] = result[i].checkSymbols(currentTable, scope, params)
+      checkAfter(1)
   else:
-    for i in 0..<node.len:
-      result[i] = result[i].checkSymbols(currentTable, scope, params)
+    checkAfter(0)
 
 func whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray[string]): TableQuery[T] =
   ## This is the internal proc that forces the query to be compiled
@@ -437,34 +448,26 @@ func normaliseCall(node: NimNode): NimNode =
   else:
     result = node
 
-macro orderByImpl[T](tableTyp: typedesc[T], table: TableQuery[T],
-                     orderList: static[seq[ColumnOrder]]): TableQuery[T] =
-  ## This is the actual implementation of orderBy. The only difference is that it takes
-  ## a typedesc parameter so I can actually lookup the table parameters
-  let tableName = tableTyp.lookupImpl().getNameSym()
-  # Check the ordering is valid
-  for order in orderList:
-    if not tableName.hasProperty(order.column):
-      fmt"{order.column} doesn't exist in {tableName}".error(table)
-
-    # Check if type can actually be nullable
-    if order.order in {NullsFirst, NullsLast}:
-      # We already checked the property exists, so we can safely get it
-      let typ = tableName.getType(order.column).get()
-      if not typ.isOptional:
-        fmt"{order.column} is not nullable".error(order.line)
-
-  # Generate code to add the items to the order
-  result = genAst(table, items = newLit(orderList), lookupSym = bindSym"lookupImpl"):
-    # Create copy we can edit (Since it might just be a whereImpl call)
-    # Then append the order
-    var x = table
-    x.order &= items
-    x
-
-proc orderBy*[T: not seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] {.error: "orderBy only works on seq[T]".}
+when not defined(docs):
+  # Error when using on non seq types, makes the type mismatch be clearer
+  proc orderBy*[T: not seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] {.error: "orderBy only works on seq[T]".}
 
 proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): TableQuery[T] =
+  ## Call after [where] to change how SQL sorts your data.
+  ##
+  ## Sorting will be a list of [asc], [desc], [nullsFirst], or [nullsLast] calls to order different columns.
+  ## These sortings run in order e.g. If the first column getting sorted is equal, then the next column will be used to compare
+  runnableExamples:
+    import ponairi/pragmas
+    type
+      Citizen {.table.} = object
+        name: string
+        age: int
+    # Get everyone older than 5 and first sort names alphabetically (From A to Z) and show the oldest
+    # person first if two people have the same name
+    static:
+      discard seq[Citizen].where(age > 5).orderBy(asc name, desc age)
+  #==#
   # Build query manually so that the line info stays correct
   let obj = T.tableName()
   result = table

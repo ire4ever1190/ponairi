@@ -130,6 +130,7 @@ proc registerTable*(obj: NimNode) =
       obj.lookupImpl()
     else:
       obj
+
   # Convert the properties to identDefs and save in the table.
   # This is still better than accessing the object raw since it means properties like
   # a, b, c: int

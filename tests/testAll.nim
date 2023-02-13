@@ -232,7 +232,9 @@ suite "Query builder":
     check db.find(seq[Person].where(extraInfo.isNone())) == @[john]
 
   test "Inside array":
-    check db.find(seq[Person].where(age in [42, 45, 46])) == people
+    const query = seq[Person].where(age in [42, 45, 46])
+    check query.sql == "Person.age IN (42, 45, 46)"
+    check db.find(query) == people
 
   test "In range":
     check db.find(seq[Person].where(age in 0..<45)) == @[jake]
@@ -269,6 +271,12 @@ suite "Query builder":
     db.delete(Person.where(age == 42))
     check db.find(seq[Person]) == @[john]
     db.insert(jake)
+
+  test "Can get default value for option":
+    check db.find(
+      Person.where(name == ?string and extraInfo.get("Some value") == ?string),
+      "Jake", "Some value"
+    ) == jake
 
   template everybody(): TableQuery = seq[Person].where()
   test "Can set order of query":
