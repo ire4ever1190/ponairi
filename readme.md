@@ -1,6 +1,6 @@
 # Pónairí 🫘
 
-Simple ORM to handle basic CRUD tasks. Future plans are to expand the query generation to make needing to write SQL less common
+Simple ORM to handle basic CRUD tasks
 
 [Docs here](https://tempdocs.netlify.app/ponairi/stable/ponairi.html)
 
@@ -11,14 +11,14 @@ To start you want to create your objects that will define your schema
 ```nim
 type
   Customer = object
-    id {.primary, autoIncrement.}: int64
+    id {.primary, autoIncrement.}: int
     email: string
     firstName, lastName: string
 
   Order = object
-    id {.primary, autoIncrement.}: int64
+    id {.primary, autoIncrement.}: int
     name: string
-    customer {.references: Customer.id.}: int64
+    customer {.references: Customer.id.}: int
 
 # Open connection to database, make sure to close connection when finished
 let db = newConn(":memory:")
@@ -67,6 +67,17 @@ Currently there is some support for automatically loading objects through refere
 # We want to load the object that is referenced by tableOrder in the customer field
 let customer = db.load(tableOrder, customer)
 assert customer is Customer
+```
+
+There is also a type safe query building API that allows you to write queries that are checked at compile time.
+This doesn't replace SQL since its a smaller subset (Only focused on writing where statements)
+
+```nim
+# Using the examples before
+# The integer comparision (customer == int param) and the parameter passed (john.id)
+# are both checked at compile time that they are the correct types
+echo db.find(Order.where(customer == ?int), john.id)
+assert db.find(Option[order].where(customer == 99999)).isNone
 ```
 
 ### Update

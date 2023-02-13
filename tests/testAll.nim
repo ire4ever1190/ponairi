@@ -1,9 +1,14 @@
 import std/[
   unittest,
   options,
-  strformat
+  times,
+  strformat,
+  algorithm
 ]
-import ponairi {.all.}
+import ponairi
+
+when (NimMajor, NimMinor) < (1, 7):
+  {.experimental: "overloadableEnums".}
 
 type
   Status = enum
@@ -35,14 +40,17 @@ func `$`(d: Dog): string =
 func `==`(a, b: Dog): bool =
   a.name == b.name and a.owner == b.owner
 
-let db = newConn(":memory:")
 
-test "Table creation":
-  db.create(Person, Dog, Something)
+
+
 
 const
   jake = Person(name: "Jake", age: 42, status: Alive)
   john = Person(name: "John", age: 45, status: Dead, extraInfo: some "Test")
+  people = [jake, john]
+
+proc `<`(a, b: Person): bool =
+  a.age < b.age
 
 let jakesDogs = [
   Dog(owner: "Jake", name: "Dog"),
@@ -51,120 +59,264 @@ let jakesDogs = [
   Dog(owner: "Jake", name: "something")
 ]
 
-test "Insert":
-  db.insert(jake)
+suite "Base API":
+  let db = newConn(":memory:")
 
-test "Insert ID":
-  check db.insertID(john) == 2
+  test "Table creation":
+    db.create(Person, Dog, Something)
 
-test "Find":
-  check db.find(Person, sql"SELECT * FROM Person WHERE name = 'Jake'") == jake
-  check db.find(Person, sql"SELECT * FROM Person WHERE name = 'John'") == john
+  test "Insert":
+    db.insert(jake)
 
-test "Try find":
-  check db.find(Option[Person], sql"SELECT * FROM Person WHERE name = 'John Doe'").isNone()
-  check db.find(Option[Person], sql"SELECT * FROM Person").isSome()
+  test "Insert ID":
+    check db.insertID(john) == 2
 
-test "Find all":
-  check db.find(seq[Person]).len == 2
+  test "Find":
+    check db.find(Person, sql"SELECT * FROM Person WHERE name = 'Jake'") == jake
+    check db.find(Person, sql"SELECT * FROM Person WHERE name = 'John'") == john
 
-test "Insert with relation":
-  db.insert(jakesDogs)
+  test "Try find":
+    check db.find(Option[Person], sql"SELECT * FROM Person WHERE name = 'John Doe'").isNone()
+    check db.find(Option[Person], sql"SELECT * FROM Person").isSome()
 
-test "Find with relation":
-  let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'")
-  check dogs == jakesDogs
+  test "Find all":
+    check db.find(seq[Person]).len == 2
 
-when false:
-  test "Auto find with relation":
-    check jakesDogs == db.findAllFor(Dog, Person)
+  test "Insert with relation":
+    db.insert(jakesDogs)
 
-test "Load parent in relation":
-  let dog = jakesDogs[0]
-  check db.load(dog, owner) == jake
+  test "Find with relation":
+    let dogs = db.find(seq[Dog], sql"SELECT * FROM Dog WHERE owner = 'Jake'")
+    check dogs == jakesDogs
 
-test "Upsert":
-  let oldVal = jakesDogs[0]
-  var dog = jakesDogs[0]
-  dog.name = "Soemthing else"
-  check dog notin db.find(seq[Dog])
-  db.upsert(dog)
-  check dog in db.find(seq[Dog])
-  db.upsert(oldVal)
+  when false:
+    test "Auto find with relation":
+      check jakesDogs == db.findAllFor(Dog, Person)
 
-test "Upsert can ignore fields":
-  let oldVal = jake
-  var person = jake
-  person.age = int.high
-  db.upsert(person, age)
-  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
+  test "Load parent in relation":
+    let dog = jakesDogs[0]
+    check db.load(dog, owner) == jake
 
-test "Upsert a sequence":
-  db.upsert(jakesDogs)
+  test "Upsert can ignore fields":
+    let oldVal = jake
+    var person = jake
+    person.age = int.high
+    db.upsert(person, age)
+    check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
 
-test "Upsert check fields exist":
-  check not compiles(db.upsert(jake, test))
+  test "Upsert a sequence":
+    db.upsert(jakesDogs)
 
-test "Finding to tuples":
-  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
-  for row in pairs:
-    check row.owner == "Jake"
-    check row.dog != ""
+  test "Upsert check fields exist":
+    check not compiles(db.upsert(jake, test))
 
-test "Delete item":
-  let dog = jakesDogs[0]
-  db.delete(dog)
-  check dog notin db.find(seq[Dog])
-  db.insert(dog)
+  test "Finding to tuples":
+    let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+    for row in pairs:
+      check row.owner == "Jake"
+      check row.dog != ""
 
-test "Exists":
-  let dog = jakesDogs[0]
-  check db.exists(dog)
-  db.delete(dog)
-  check not db.exists(dog)
-  db.insert(dog)
+  test "Upsert":
+    let oldVal = jakesDogs[0]
+    var dog = jakesDogs[0]
+    dog.name = "Soemthing else"
+    check dog notin db.find(seq[Dog])
+    db.upsert(dog)
+    check dog in db.find(seq[Dog])
+    db.upsert(oldVal)
 
-test "Cascade deletion":
-  db.delete(jake)
-  check not db.exists(jake)
-  check not db.exists(jake)
-  for dog in jakesDogs:
+  test "Finding to tuples":
+    let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+    for row in pairs:
+      check row.owner == "Jake"
+      check row.dog != ""
+
+  test "Delete item":
+    let dog = jakesDogs[0]
+    db.delete(dog)
+    check dog notin db.find(seq[Dog])
+    db.insert(dog)
+
+  test "Exists":
+    let dog = jakesDogs[0]
+    check db.exists(dog)
+    db.delete(dog)
     check not db.exists(dog)
-  db.insert(jake)
+    db.insert(dog)
+
+  test "Cascade deletion":
+    db.delete(jake)
+    check not db.exists(jake)
+    check not db.exists(jake)
+    for dog in jakesDogs:
+      check not db.exists(dog)
+    db.insert(jake)
+    db.insert(jakesDogs)
+
+  test "Store times":
+    type
+      Exercise = object
+        # I know this doesn't make any sense
+        time: Time
+        date: DateTime
+    db.create(Exercise)
+    defer: db.drop(Exercise)
+
+    var now = now()
+    # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
+    # or else they won't compare properly
+    now = dateTime(now.year, now.month, now.monthday, now.hour, now.minute, now.second)
+    let currTime = getTime().toUnix().fromUnix()
+
+    let exercise = Exercise(time: currTime, date: now)
+    db.insert(exercise)
+
+    check db.find(seq[Exercise])[0] == exercise
+
+  test "Exists without primary key":
+    type
+      Basic = object
+        a: string
+        b: int
+    db.create(Basic)
+    defer: db.drop(Basic)
+
+    let item = Basic(a: "foo", b: 9)
+    check not db.exists(item)
+    db.insert(item)
+    check db.exists(item)
+  close db
+
+suite "Query builder":
+  let db = newConn(":memory:")
+  db.create(Person, Dog)
+  db.insert(people)
   db.insert(jakesDogs)
 
-import std/times
-test "Store times":
-  type
-    Exercise = object
-      # I know this doesn't make any sense
-      time: Time
-      date: DateTime
-  db.create(Exercise)
-  defer: db.drop(Exercise)
+  test "Find one":
+    check db.find(Person.where(name == "Jake")) == jake
 
-  var now = now()
-  # SQLite doesn't store nanoseconds (Only milli) so we need to truncate to only seconds
-  # or else they won't compare properly
-  now = dateTime(now.year, now.month, now.monthday, now.hour, now.minute, now.second)
-  let currTime = getTime().toUnix().fromUnix()
+  test "Find multiple":
+    check db.find(seq[Person].where(age > 40)) == @people
 
-  let exercise = Exercise(time: currTime, date: now)
-  db.insert(exercise)
+  test "Exists":
+    check db.exists(Person.where(name == "Jake"))
+    check not db.exists(Person.where(age < 10))
 
-  check db.find(seq[Exercise])[0] == exercise
+  test "Inner SQL exists":
+    check db.exists(Person.where(
+      exists(Dog.where(owner == "Jake")))
+    )
 
-test "Exists without primary key":
-  type
-    Basic = object
-      a: string
-      b: int
-  db.create(Basic)
-  defer: db.drop(Basic)
+  test "Can't use property that doesn't exist":
+    check not compiles(Person.where(unknown == "test"))
 
-  let item = Basic(a: "foo", b: 9)
-  check not db.exists(item)
-  db.insert(item)
-  check db.exists(item)
+  test "Scope changes when directly accessing table":
+    check not compiles(Person.where(
+      exists(Dog.where(owner == Person.owner))
+    ))
 
-close db
+  test "Can only access tables that are in scope":
+    check not compiles(Person.where(Dog.name == "test"))
+
+  test "Can access outer table in inner call":
+    check db.find(seq[Person].where(
+      exists(Dog.where(owner == Person.name))
+    )) == @[jake]
+
+  test "Types are checked":
+    check not compiles(db.find(Person.where(name == 9)))
+
+  test "Can perform nil checks":
+    check db.find(seq[Person].where(extraInfo.isSome)) == @[jake]
+    check db.find(seq[Person].where(extraInfo.isNone())) == @[john]
+
+  test "Inside array":
+    const query = seq[Person].where(age in [42, 45, 46])
+    check query.sql == "Person.age IN (42, 45, 46)"
+    check db.find(query) == people
+
+  test "In range":
+    check db.find(seq[Person].where(age in 0..<45)) == @[jake]
+
+  test "Pattern matching":
+    check db.find(seq[Person].where(name ~= "%Ja%")) == @[jake]
+
+  test "Parameters":
+    check db.find(Person.where(name == ?string), "Jake") == jake
+    check db.find(Person.where(name == ?[0, string]), "Jake") == jake
+    check db.find(Person.where(age == ?[0, int] and name == "Jake"), 42) == jake
+
+  test "Parameters can reuse numbers":
+    check db.find(Person.where(name == ?[0, string] and name == ?[0, string]), "Jake") == jake
+    check db.find(Person.where(
+      name == ?[0, string] and age == ?[1, int] and
+      name == ?[0, string] and age == ?[1, int]
+    ), "Jake", 42) == jake
+  test "Error if parameter is jumping too far ahead":
+    check not compiles(Person.where(name == ?[1, string]))
+
+  test "Error if parameter type doesn't line up":
+    # Don't know why someone would do this
+    # But I'm probably going to do it so best to check lol
+    check not compiles(Person.where(name == ?string and age == ?[0, int]))
+
+  test "Type mismatches don't compile":
+    check not compiles(db.find(Person.where(name == ?string), 9))
+
+  test "Mismatched amount of parameters don't compile":
+    check not compiles(db.find(Person.where(name == ?string and name == ?int)))
+
+  test "Can delete":
+    db.delete(Person.where(age == 42))
+    check db.find(seq[Person]) == @[john]
+    db.insert(jake)
+
+  test "Can get default value for option":
+    check db.find(
+      Person.where(name == ?string and extraInfo.get("Some value") == ?string),
+      "Jake", "Some value"
+    ) == jake
+
+  template everybody(): TableQuery = seq[Person].where()
+  test "Can set order of query":
+    check db
+      .find(everybody().orderBy(asc age))
+      .isSorted(Ascending)
+
+    check db
+      .find(everybody().orderBy(desc age))
+      .isSorted(Descending)
+
+  test "Can set null order":
+    check db
+      .find(everybody().orderBy(nullsFirst extraInfo))[0]
+      .extraInfo.isNone()
+
+    check db
+      .find(everybody().orderBy(nullsLast extraInfo))[0]
+      .extraInfo.isSome()
+
+  when false: # TODO: Run these tests with testament.
+    test "Can only use null order on nullable column":
+      check not compiles(everybody().orderBy(nullsFirst age))
+
+    test "orderBy checks column exists":
+      check not compiles(everybody().orderBy(desc notFound))
+
+  test "Multiple orderings can be passed":
+    # More just checking the query actually runs, I trust sqlite to work
+    discard db.find everybody().orderBy(asc age, desc name)
+
+  test "Works in overloaded templates":
+    # This was a weird bug I found which was causing problems when used in async (Due to a feature I implemented funnyily enough)
+    # Not an issue with async, but for some reason overloaded templates in general caused issues.
+    #
+    # For future reference in case this ever pops up again:
+    # The problem was me assigning the query to a temporary const, not doing that fixed it (Guessing it was some weird sem matching problem)
+    template foo(x: string) =
+      echo x
+    template foo(x: untyped) =
+      discard x
+    foo:
+      db.find(Person.where())

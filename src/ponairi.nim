@@ -4,10 +4,11 @@ import std/macrocache
 import std/strutils
 import std/options
 import std/times
-import ndb/sqlite
+import ndb/sqlite except `?`
 
 import ponairi/[
   pragmas,
+  queryBuilder,
   macroUtils
 ]
 
@@ -69,7 +70,6 @@ db.insert(Person(name: "Jake", age: 42))
 
 [find] is used for all operations relating to getting objects from a database.
 It uses a type based API where the first parameter (after the db connection) determines the return type.
-Currently most tasks require you to write SQL yourself but this will hopefully change in the future
 
 ```nim
 # Gets the Object we created before
@@ -87,6 +87,9 @@ for person in db.find(seq[Person], sql"SELECT * FROM Person WHERE age > 1"):
 for person in db.find(seq[Person]):
   echo person
 ```
+
+There is also a [query building API](ponairi/queryBuilder.html) that enables type safe query construction for
+simple where statements
 
 #### Update
 
@@ -159,7 +162,7 @@ runnableExamples:
 #==#
 
 type
-  SomeTable* = ref[object] | object
+  SomeTable* = (ref[object] | object) and not TableQuery[auto]
     ## Supported types for reprsenting table schema
 
 const dateFormat = "yyyy-MM-dd HH:mm:ss'.'fff"
@@ -218,35 +221,11 @@ template transaction(db; body: untyped) =
     db.rollback()
     raise
 
-proc getName(n: NimNode): string =
-  case n.kind
-  of nnkIdent, nnkSym:
-    result = n.strVal
-  of nnkPostFix:
-    result = n[1].getName()
-  of nnkTypeDef:
-    result = n[0].getName()
-  else:
-    echo n.treeRepr
-    assert false, "Name is invalid"
-
-proc getProperties(impl: NimNode): seq[Property] =
-  let identDefs = if impl[2].kind == nnkRefTy: impl[2][0][2] else: impl[2][2]
-  for identDef in identDefs:
-    for property in identDef[0 ..< ^2]:
-      var newProp = Property(typ: identDef[^2])
-      if property.kind == nnkPragmaExpr:
-        newProp.name = property[0].getName
-        for pragma in property[1]:
-          newProp.pragmas &= initPragma(pragma)
-      else:
-        newProp.name = property.getName
-      result &= newProp
-
 template fieldPairs(x: ref object): untyped = fieldPairs(x[])
 macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
   let impl = T.lookupImpl()
+  registerTable(impl.getNameSym)
   result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
   let properties = impl.getProperties()
   # Keep list of primary keys so that we can generate them last.
@@ -595,5 +574,6 @@ proc exists*[T: SomeTable](db; item: T): bool =
 
 export hasCustomPragma # Wouldn't bind
 export replace
+export queryBuilder
 export pragmas
 export sqlite

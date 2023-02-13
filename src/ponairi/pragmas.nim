@@ -1,3 +1,5 @@
+import macroUtils
+
 ##[
 Pragmas are used to control extra info about fields such as references or how to handle deletions
 ]##
@@ -29,3 +31,8 @@ template references*(column: untyped) {.pragma.}
 
 template cascade*() {.pragma.}
   ## Turns on cascade deletion for a foreign key reference
+
+macro table*(typ: untyped): untyped =
+  ## Registers an object with ponairi without needing to use `create`.
+  registerTable(typ)
+  typ

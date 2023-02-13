@@ -1,6 +1,7 @@
 import std/[
   macrocache,
-  macros
+  macros,
+  options
 ]
 
 type
@@ -15,6 +16,12 @@ type
     typ*: NimNode
     # I don't think a person will have too many pragmas so a seq should be fine for now
     pragmas*: seq[Pragma]
+
+const identNodes = {nnkIdent, nnkSym}
+
+func isIdent(x: NimNode): bool =
+  ## Returns if the node is an ident type (See identNodes)
+  x.kind in identNodes
 
 when not declared(macrocache.contains):
   # Naive version for when on old versions of Nim
@@ -49,20 +56,27 @@ func `[]`*(items: seq[Pragma], name: string): Pragma =
   for item in items:
     if item.name.eqIdent(name): return item
 
-proc getName*(n: NimNode): string =
+proc getNameSym*(n: NimNode): NimNode =
+  ## Gets the name node for an object definition
   case n.kind
   of nnkIdent, nnkSym:
-    result = n.strVal
+    result = n
   of nnkPostFix:
-    result = n[1].getName()
+    result = n[1].getNameSym()
   of nnkTypeDef:
-    result = n[0].getName()
+    result = n[0].getNameSym()
+  of nnkPragmaExpr:
+    result = n[0].getNameSym()
   else:
     echo n.treeRepr
     assert false, "Name is invalid"
 
+proc getName*(n: NimNode): string =
+  result = n.getNameSym.strVal
+
 proc getProperties*(impl: NimNode): seq[Property] =
-  for identDef in impl[2][2]:
+  let identDefs = if impl[2].kind == nnkRefTy: impl[2][0][2] else: impl[2][2]
+  for identDef in identDefs:
     for property in identDef[0 ..< ^2]:
       var newProp = Property(typ: identDef[^2])
       if property.kind == nnkPragmaExpr:
@@ -93,10 +107,13 @@ proc lookupImpl*(T: NimNode): NimNode =
       echo result.treeRepr
       "Beans misconfigured: Could not look up type".error(T)
 
-
-func isOptional*(prop: Property): bool =
+func isOptional*(prop: Property | NimNode): bool =
   ## Returns true if the property has an optional type
-  result = prop.typ.kind == nnkBracketExpr and prop.typ[0].eqIdent("Option")
+  when prop is Property:
+    let node = prop.typ
+  else:
+    let node = prop
+  result = node.kind == nnkBracketExpr and node[0].eqIdent("Option")
 
 func isPrimary*(prop: Property): bool =
   ## Returns true if the property is a primary key
@@ -104,17 +121,79 @@ func isPrimary*(prop: Property): bool =
 
 const properties = CacheTable"ponairi.properties"
 
-proc hasProperty*(obj: NimNode, property: string | NimNode): bool =
-  let key = obj.strVal
-  if key in properties:
-    # Do simple linear scan for property
-    for prop in properties[key]:
-      if prop.eqIdent(property): # TODO: Maybe normalise first to make comparison quicker?
-        return true
+proc registerTable*(obj: NimNode) =
+  ## Adds a tables properties to the properties cache table
+  var props = newStmtList()
+  # Find the type def
+  let impl = if obj.isIdent():
+      if obj.strVal in properties: return
+      obj.lookupImpl()
+    else:
+      obj
+
+  # Convert the properties to identDefs and save in the table.
+  # This is still better than accessing the object raw since it means properties like
+  # a, b, c: int
+  # are normalised into a: int, b: int, c: int which means less checking later
+  for properties in impl.getProperties():
+    props &= newIdentDefs(ident properties.name, properties.typ)
+  properties[if obj.isIdent: obj.strVal else: obj.getName()] = props
+
+using obj: NimNode | string
+
+proc getType*(obj; property: string | NimNode): Option[NimNode] =
+  ## Returns the type for a property if it exists
+  when obj is NimNode:
+    let key = obj.strVal
   else:
-    var props = newStmtList()
-    for properties in obj.lookupImpl().getProperties():
-      props &= ident properties.name
-    properties[key] = props
-    # TODO: Run check while adding? Don't think that would cause too much slowdown tho
-    result = obj.hasProperty(property)
+    let key = obj
+  bind items
+  if key in properties:
+    for prop in properties[key].items:
+      if prop[0].eqIdent(property):
+        return some prop[1]
+  else:
+    when obj is NimNode:
+      # TODO: Add parameter to stop infinite recursion
+      registerTable(obj)
+      result = obj.getType(property)
+    else:
+      error("Make sure you have used create to register the table with ponairi")
+
+proc hasProperty*(obj; property: string | NimNode): bool =
+  ## Returns true if **obj** has **property**
+  result = obj.getType(property).isSome
+
+func eqIdent*(name: NimNode | string, idents: openArray[string]): bool =
+  ## Returns true if `name` equals any of the idents.
+  for ident in idents:
+    if name.eqIdent(ident):
+      return true
+
+func withArgs*(call, args: NimNode | openArray[NimNode]): NimNode =
+  ## Adds all arguments in `args` to be appended to call
+  result = call
+  for arg in args:
+    call &= arg
+
+func newBlockExpr*(body: varargs[NimNode]): NimNode =
+  ## Creates a new block expression using the nodes in `body` as the statement list
+  # Is called newBlockExpr instead of newBlockStmt so that it isn't confused with
+  # the overload that takes label + body
+  var bodyItems = newStmtList()
+  for item in body:
+    bodyItems &= item
+  result = newBlockStmt(bodyItems)
+
+proc error*(msg: string, line: LineInfo) =
+  ## Sets an error to be on a specific line
+  let tmp = newEmptyNode()
+  when declared(macros.setLineInfo):
+    tmp.setLineInfo(line)
+  msg.error(tmp)
+
+func newLit*[T](x: openArray[T]): NimNode =
+  var items = nnkBracket.newTree()
+  for item in x:
+    items &= newLit item
+  result = items.prefix("@")
