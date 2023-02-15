@@ -126,6 +126,9 @@ type
     ## This is a component of a query, stores the type that the SQL would return
     ## and also the SQL that it is
 
+const inlineParam = "PONAIRI_INLINE_PARAM"
+  ## Sentinal value for when a parameter is provided inline and so we shouldn't expect a value
+
 func tableName[T](x: typedesc[T]): string =
   result = $T
 
@@ -285,6 +288,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
+
   template checkAfter(start: int) =
     ## Checks the rest of the nodes starting with `start`
     for i in start..<node.len:
@@ -300,7 +304,6 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       if typ.isNone:
         fmt"{node} doesn't exist in {currentTable}".error(node)
       return initQueryPartNode(typ.unsafeGet, fmt"{currentTable.strVal}.{node.strVal}")
-
   of nnkStrLit:
     return initQueryPartNode(string, fmt"'{node.strVal}'")
   of nnkIntLit:

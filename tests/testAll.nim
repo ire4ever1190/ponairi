@@ -307,6 +307,10 @@ suite "Query builder":
   test "Multiple orderings can be passed":
     # More just checking the query actually runs, I trust sqlite to work
     discard db.find everybody().orderBy(asc age, desc name)
+    let name = "test"
+    discard db.find(
+      Person.where(name == {name})
+    )
 
   test "Works in overloaded templates":
     # This was a weird bug I found which was causing problems when used in async (Due to a feature I implemented funnyily enough)
