@@ -167,4 +167,18 @@ test "Exists without primary key":
   db.insert(item)
   check db.exists(item)
 
+test "Tuples to handle joins":
+  # This is from a good example brought up by enthus1ast that I thought I supported but not well enough.
+  # This checks the syntax from his example works (Which I found to be good syntax)
+  const query = "SELECT Dog.*, Person.name FROM Dog JOIN Person ON Person.name = Dog.owner"
+  let results = db.find(seq[(Dog, string)], query)
+
+  func `==`(d: Dog, b: (Dog, string)): bool = d == b[0]
+
+  for dog in jakesDogs:
+    let index = results.find(dog)
+    check index != -1
+    if index != -1:
+      check results[index][1] == "Jake"
+
 close db
