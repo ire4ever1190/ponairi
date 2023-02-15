@@ -465,9 +465,23 @@ proc to*(src: DbValue, dest: var DateTime) {.inline.} = dest = src.s.parse(dateF
 
 proc to*[T: SomeTable | tuple](row: Row, dest: var T) =
   var i = 0
+  # Make sure the ref object is initialised
+  when T is ref:
+    dest = T()
+  # Convert the rows into the values.
+  # If a tuple has an object inside it then we need to treat it like a JOIN i.e. the values are all in the row
   for field, value in dest.fieldPairs:
-    row[i].to(value)
-    i += 1
+    when T is tuple and value is SomeTable:
+      # Make sure refs are initialised
+      when value is ref:
+        value = typeof(value)()
+      # Now do its children
+      for f, v in value.fieldPairs:
+        row[i].to(v)
+        i += 1
+    else:
+      row[i].to(value)
+      i += 1
 
 macro load*[C: SomeTable](db; child: C, field: untyped): object =
   ## Loads parent from child using field
@@ -524,14 +538,11 @@ proc find*[T: SomeTable](db; table: typedesc[Option[T]], query: SqlQuery, args):
 
 iterator find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, args): T =
   for row in db.rows(query, args):
-    when T is SomeTable:
-      var res = T()
-    else:
-      var res =  default(T)
+    var res = default(T)
     row.to(res)
     yield res
 
-iterator find*[T: SomeTable](db; table: typedesc[seq[T]]): T =
+iterator find*[T: SomeTable | tuple](db; table: typedesc[seq[T]]): T =
   ## Returns all rows that belong to **table**
   for row in db.find(table, sql("SELECT * FROM " & $T)):
     yield row
