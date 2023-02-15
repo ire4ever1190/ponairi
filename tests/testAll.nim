@@ -182,4 +182,17 @@ test "Tuples to handle joins":
     if index != -1:
       check results[index][1] == "Jake"
 
+test "Transaction template":
+  var thrown = false
+  let garry = Person(name: "Garry", age: 101, status: Alive)
+  try:
+    db.transaction:
+      db.insert garry
+      raise (ref CatchableError)()
+  except CatchableError:
+    thrown = true
+
+  check thrown
+  check not db.exists garry
+
 close db

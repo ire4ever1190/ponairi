@@ -207,7 +207,7 @@ proc commit*(db) =
   ## Commits a transaction
   db.exec(sql"COMMIT")
 
-template transaction(db; body: untyped) =
+template transaction*(db; body: untyped) =
   ## Runs the body in a transaction.
   ## If any error happens then it rolls back the transaction
   db.startTransaction()
