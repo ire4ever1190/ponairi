@@ -233,7 +233,7 @@ suite "Query builder":
 
   test "Inside array":
     const query = seq[Person].where(age in [42, 45, 46])
-    check query.sql == "Person.age IN (42, 45, 46)"
+    check query.whereExpr == "Person.age IN (42, 45, 46)"
     check db.find(query) == people
 
   test "In range":
@@ -243,29 +243,24 @@ suite "Query builder":
     check db.find(seq[Person].where(name ~= "%Ja%")) == @[jake]
 
   test "Parameters":
-    check db.find(Person.where(name == ?string), "Jake") == jake
-    check db.find(Person.where(name == ?[0, string]), "Jake") == jake
-    check db.find(Person.where(age == ?[0, int] and name == "Jake"), 42) == jake
+    check db.find(Person.where(name == {"Jake"})) == jake
+    check db.find(Person.where(age == {jake.age} and name == {jake.name})) == jake
 
-  test "Parameters can reuse numbers":
-    check db.find(Person.where(name == ?[0, string] and name == ?[0, string]), "Jake") == jake
+  test "Parameters can be reused":
+    let
+      name = "Jake"
+      age = 42
+    let query = Person.where(name == {name} and name == {name})
+    checkpoint query.whereExpr
+    check query.params.len == 1
     check db.find(Person.where(
-      name == ?[0, string] and age == ?[1, int] and
-      name == ?[0, string] and age == ?[1, int]
-    ), "Jake", 42) == jake
-  test "Error if parameter is jumping too far ahead":
-    check not compiles(Person.where(name == ?[1, string]))
-
-  test "Error if parameter type doesn't line up":
-    # Don't know why someone would do this
-    # But I'm probably going to do it so best to check lol
-    check not compiles(Person.where(name == ?string and age == ?[0, int]))
+      name == {name} and age == {age} and
+      name == {name} and age == {age}
+    )) == jake
 
   test "Type mismatches don't compile":
-    check not compiles(db.find(Person.where(name == ?string), 9))
-
-  test "Mismatched amount of parameters don't compile":
-    check not compiles(db.find(Person.where(name == ?string and name == ?int)))
+    let num = 9
+    check not compiles(db.find(Person.where(name == {num})))
 
   test "Can delete":
     db.delete(Person.where(age == 42))
@@ -274,43 +269,37 @@ suite "Query builder":
 
   test "Can get default value for option":
     check db.find(
-      Person.where(name == ?string and extraInfo.get("Some value") == ?string),
-      "Jake", "Some value"
+      Person.where(name == {"Jake"} and extraInfo.get("Some value") == {"Some value"})
     ) == jake
 
   template everybody(): TableQuery = seq[Person].where()
   test "Can set order of query":
     check db
-      .find(everybody().orderBy(asc age))
+      .find(everybody(), asc age)
       .isSorted(Ascending)
 
     check db
-      .find(everybody().orderBy(desc age))
+      .find(everybody(), desc age)
       .isSorted(Descending)
 
   test "Can set null order":
     check db
-      .find(everybody().orderBy(nullsFirst extraInfo))[0]
+      .find(everybody(), nullsFirst extraInfo)[0]
       .extraInfo.isNone()
 
     check db
-      .find(everybody().orderBy(nullsLast extraInfo))[0]
+      .find(everybody(), nullsLast extraInfo)[0]
       .extraInfo.isSome()
 
-  when false: # TODO: Run these tests with testament.
-    test "Can only use null order on nullable column":
-      check not compiles(everybody().orderBy(nullsFirst age))
+  test "Can only use null order on nullable column":
+    check not compiles(db.find(everybody(), nullsFirst age))
 
-    test "orderBy checks column exists":
-      check not compiles(everybody().orderBy(desc notFound))
+  test "orderBy checks column exists":
+    check not compiles(db.find(everybody(), desc notFound))
 
   test "Multiple orderings can be passed":
     # More just checking the query actually runs, I trust sqlite to work
-    discard db.find everybody().orderBy(asc age, desc name)
-    let name = "test"
-    discard db.find(
-      Person.where(name == {name})
-    )
+    discard db.find(everybody(), asc age, desc name)
 
   test "Works in overloaded templates":
     # This was a weird bug I found which was causing problems when used in async (Due to a feature I implemented funnyily enough)
@@ -324,3 +313,6 @@ suite "Query builder":
       discard x
     foo:
       db.find(Person.where())
+
+  test "Parameters are not allowed in the order":
+    check not compiles(db.find(everybody(), asc age > {test}))

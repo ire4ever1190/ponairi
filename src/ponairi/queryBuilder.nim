@@ -62,17 +62,18 @@ runnableExamples:
   assert not compiles(Cart.where(id == "9"))
   # Doesn't compile since CartItem table isn't accessible currently
   assert not compiles(Cart.where(id == CartItem.item))
-  # Parameters need to have their types specified and so this doesn't compile since
-  # id is a string
-  assert not compiles(Card.where(id == ?string))
+
 
   # We can write simple queries to check columns
   db.insert Item(name: "Lamp", price: 9.0)
   assert db.find(Item.where(price > 5.0)).name == "Lamp"
 
-  # We can also use parameters, only difference is we need to annotate the type.
-  # The position can also be set like ?[pos, typ]
-  assert db.find(Item.where(price > ?float), 5.0).name == "Lamp"
+  # Params can be passed inside {} just like std/strformat
+  # Any nim expression is allowed
+  assert db.find(Item.where(price > {3.0 + 2.0})).name == "Lamp"
+  let someLowerLimit = 5.0
+  assert db.find(Item.where(price > {someLowerLimit})).name == "Lamp"
+
 
   # We can also build complex sub queries. We will add in some more data
   # and then find all customers that have a Lamp in their cart
@@ -114,20 +115,19 @@ type
     line: LineInfo # Store line info so error messages are better later
 
   TableQuery*[T] = object
-    ## This is a full query. Stores information about the main table it is trying to access,
-    ## what the SQL to run is, and what parameters it has
-    sql*: string
-    # Sequence of types for the parameters
-    # Was too much of a pain to move around NimNodes
-    params*: seq[string]
+    ## This is a full query. Stores the type of the table it is accessing
+    ## and the SQL that will be executed
+    # This is a constant that I probably could've stored in the type signature.
+    # But that made life very difficult
+    whereExpr*: string
+    params*: seq[DbValue]
     order*: seq[ColumnOrder]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
     ## and also the SQL that it is
 
-const inlineParam = "PONAIRI_INLINE_PARAM"
-  ## Sentinal value for when a parameter is provided inline and so we shouldn't expect a value
+  SqlColumnOrder = QueryPart[SortOrder]
 
 func tableName[T](x: typedesc[T]): string =
   result = $T
@@ -157,21 +157,10 @@ makeOrder(nullsLast, NullsLast):
   ## Makes `nil` values get returned last
   ## Column must be optional
 
-func buildOrderBy*(table: TableQuery): string =
+func build(order: openArray[SqlColumnOrder]): string =
   ## Returns the ORDER BY clause. You probably won't need to use this
   ## But will be useful if you want to create your own functions
-  runnableExamples:
-    import ponairi
-
-    type
-      Person {.table.} = object
-        name: string
-        age: int
-
-    const query = seq[Person].where().orderBy(asc name, desc age)
-    assert query.buildOrderBy() == "ORDER BY name ASC, age DESC"
-  #==#
-  if table.order.len > 0:
+  if order.len > 0:
     # We can't set the string directly on the enum
     # since that would mess up the parseEnum call
     const toStr: array[SortOrder, string] = [
@@ -181,8 +170,8 @@ func buildOrderBy*(table: TableQuery): string =
       "NULLS LAST"
     ]
     result = "ORDER BY "
-    result.add table.order.seperateBy(", ") do (x: auto) -> string:
-      fmt"{x.column} {toStr[x.order]}"
+    result.add order.seperateBy(", ") do (x: auto) -> string:
+      x.string
 #
 # Functions that build the query
 #
@@ -231,7 +220,7 @@ func `~=`*(a, pattern: QueryPart[string]): QueryPart[bool] =
 func exists*[T](q: TableQuery[T]): QueryPart[bool] =
   ## Implements `EXISTS()` for the query builder
   const table = T.tableName
-  result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)")
+  result = QueryPart[bool](fmt"EXISTS(SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)")
 
 func get*[T](q: QueryPart[Option[T]], default: QueryPart[T]): QueryPart[T] =
   ## Trys to get the value from the column but returns default if its `none(T)`
@@ -283,8 +272,13 @@ func initQueryPartNode(x: NimNode, val: string): NimNode =
 func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
+func sqlParam[T](call: typedesc[T], index: int): QueryPart[T] =
+  ## Adds in a SQL query parameter that relates to a certain index.
+  ## The call should just be a type of what it expects
+  result = QueryPart[T]("?" & $index)
+
 proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
-                  params: var seq[string]): NimNode =
+                  params: var seq[NimNode]): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
@@ -293,6 +287,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
     ## Checks the rest of the nodes starting with `start`
     for i in start..<node.len:
         result[i] = result[i].checkSymbols(currentTable, scope, params)
+
   result = node
   case node.kind
   of nnkIdent, nnkSym:
@@ -348,53 +343,39 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       result[0] = function
       result.insert(1, firstParam)
     checkAfter(1)
-  of nnkPrefix:
-    if node[0].eqIdent("?"):
-      # ? parameters need to be implemented like this so we can keep track of the
-      # parameters. Used to be implemented as a macro but then I couldn't get the parameters
-      # later
-      let param = node[1]
-      const usageMsg = "parameters must be specified with ?[pos, typ] or ?typ"
-      var
-        pos: BiggestInt = params.len
-        typ: NimNode
-      # Find the type and optional size
-      case param.kind
-      of nnkIdent, nnkSym:
-        typ = ident param.strVal
-      of nnkBracket:
-        if param.len != 2:
-          usageMsg.error(param)
-        else:
-          if param[0].kind != nnkIntLit:
-            "Size must be an integer literal".error(param[0])
-          elif param[1].kind != nnkIdent:
-            "Second parameter must be a type".error(param[1])
-        pos = param[0].intVal
-        typ = param[1]
+  of nnkCurly:
+    if node.len == 1:
+      let param = node[0]
+      # If its a variable that see if we can match it to an existing variable.
+      # This stops us creating multiple variables of the same type.
+      # We don't do this for anything else (e.g. calls) since they might have side effects
+      var pos = params.len
+      if param.kind == nnkIdent:
+        var found = false
+        for i, existing in params:
+          if existing.kind == nnkIdent and existing.eqIdent(param):
+            pos = i
+            found = true
+            break
+        if not found:
+          params &= param
       else:
-        usageMsg.error(node)
-      # Check the position is valid
-      if pos == params.len:
-        params.insert(repr typ, pos)
-      elif pos > params.len:
-        "Invalid position for parameter".error(param)
-      elif repr(typ) != params[pos]:
-        fmt"Parameter at index {pos} is {params[pos]} but you tried to override with {typ}".error(param)
+        params &= param
 
-      result = initQueryPartNode(typ, "?" & $(pos + 1)) # SQLite parameters are 1 indexed
+      # Insert a call in its place which sets the type and places a parameter that can
+      # be binded to later
+      result = newCall(bindSym"sqlParam", newCall("typeof", param), newLit(pos + 1))
     else:
-      checkAfter(1)
+      checkAfter(0)
   else:
     checkAfter(0)
 
-func whereImpl*[T](table: typedesc[T], query: QueryPart[bool], params: openArray[string]): TableQuery[T] =
+func whereImpl*[T](table: typedesc[T], query: static[QueryPart[bool]],
+                   args: seq[DbValue]): TableQuery[T] =
   ## This is the internal proc that forces the query to be compiled
-  result.sql = query.string
-  for i in params:
-    result.params &= i
+  TableQuery[table](whereExpr: query.string, params: args)
 
-macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
+macro where*(table: typedesc, query: untyped): TableQuery =
   ## Use this macro for genearting queries.
   ## The query is a boolean expression made in Nim code
   runnableExamples:
@@ -414,18 +395,21 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
     # ShopItem.id == 9 AND LENGTH(ShopItem.name) > 9 OR ShopItem.price == 0.0 OR ShopItem.name == ?1
   #==#
   let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
-  var params: seq[string]
+  var params: seq[NimNode]
   let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
   # Boolean literals aren't allowed to be the entire query
   # Realised this would compile, but fail at runtime when trying to do Type.where(true)
   if query.kind == nnkIdent and query.eqIdent(["true", "false"]):
     "Query cannot be a single boolean value".error(query)
-  # Move the parameters into a node that we can pass into the second call
-  result = newCall(bindSym"whereImpl", table, queryNodes, newLit(params)[1])
+  # Add dbValue calls to convert the params
+  var dbParams = nnkBracket.newTree()
+  for param in params:
+    dbParams &= newCall("dbValue", param)
+  result = newCall(bindSym"whereImpl", table, queryNodes, dbParams.prefix("@"))
 
-func where*[T](table: typedesc[T]): TableQuery[T] =
+template where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
-  result = TableQuery[T](sql: "1 == 1")
+  TableQuery[table](whereExpr: "1 == 1")
 
 func normaliseCall(node: NimNode): NimNode =
   ## Normalises
@@ -488,78 +472,40 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): Tab
         fmt"{order.column} is not nullable".error(order.line)
 
     result.order &= order
+
 #
 # Overloads to use TableQuery
 #
 
-proc findImpl[T](db; q: static[TableQuery[T]], args): T {.inline.} =
+proc findImpl[T](db; q: TableQuery[T], order: static openArray[SqlColumnOrder]): T =
   const
     table = T.tableName
-    query = sql fmt"SELECT * FROM {table} WHERE {q.sql} {q.buildOrderBy()}"
-  db.find(T, query, args)
+    order = order.build()
+  let query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr}"
+  db.find(T, query, q.params)
 
-proc existsImpl[T](db; q: static[TableQuery[T]], args): bool =
-  const
-    table = T.tableName
-    query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.sql} LIMIT 1)"
-  db.getValue[:int64](query, args).unsafeGet() == 1
-
-proc deleteImpl[T](db; q: static[TableQuery[T]], args) =
-  const
-    table = T.tableName
-    query = sql fmt"DELETE FROM {table} WHERE {q.sql}"
-  db.exec(query, args)
-
-macro checkArgs(types: static[seq[string]], args: varargs[untyped]) =
-  ## Generates a series of checks to make sure the args types are correct
-  if types.len != args.len:
-    fmt"Got {args.len} arguments but expected {types.len}".error(args)
-  result = newStmtList()
-  for i in 0..<args.len:
-    let arg = args[i]
-    let info = arg.lineInfoObj
-    let foo = genAst(typ = parseExpr types[i], arg, i):
-      when typeof(arg) isnot typ:
-        {.error: "Expected " & $typ & " but got " & $typeof(arg) & " for argument " & $i.}
-
-    when declared(macros.setLineInfo):
-      # We want the error message to point to where the user is calling the query (Instead of pointing to here)
-      foo[0][1][0][0].setLineInfo(info)
-    result &= foo
+macro find[T](db; q: TableQuery[T], order: varargs[untyped]): T =
+  ## Finds any row/rows that match the query
+  # Convert the order into QueryPart
+  let orderCalls = nnkBracket.newTree()
+  # for o in order:
+    # orderCalls
+  result = newCall(bindSym"findImpl", q, nnkBracket.newTree())
 
 
-template generateIntermediateMacro(name, docs: untyped) =
-  ## We need to have a macro that checks the types and then passes it off to the actual proc.
-  ## This just removes the boiler plate of having to write that macro for each proc
-  macro name*(db; q: TableQuery, args: varargs[untyped]): untyped =
-    docs
-    # When we get a query we perform two steps
-    # - Check the arguments are correct (types, number of args)
-    # - Then run the query
-    let
-      f = bindSym(astToStr(name) & "impl")
-      # Make temp variable incase TableQuery is a call and not a value
-      tmp = ident"tmp"
-    tmp.copyLineInfo(q)
-    # Build manually so errors point to correct lines
-    # TODO: Create a temp so that we aren't generating the query twice (See test 'Works in overloaded templates')
-    result = newBlockExpr(
-      # Call to heck the arguments passed are correct
-      newCall(bindSym"checkArgs", newDotExpr(q, ident"params")).withArgs(args),
-      # Call to the actual function
-      newCall(f, db, q).withArgs(args)
-    )
+proc exists*[T](db; q: TableQuery[T]): bool =
+  ## Returns true if the query finds atleast one row
+  const table = T.tableName
+  let query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
+  db.getValue[:int64](query, q.params).unsafeGet() == 1
+
+proc delete*[T](db; q: TableQuery[T]) =
+  ## Deletes any rows that match the query
+  const table = T.tableName
+  let query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
+  db.exec(query, q.params)
 
 proc `$`*(x: TableQuery): string =
   ## Used for debugging a query, returns the generated SQL
-  x.sql
-
-generateIntermediateMacro(find):
-  ## Finds any row/rows that match the query
-
-generateIntermediateMacro(exists):
-  ## Returns true if the query finds atleast one row
-
-generateIntermediateMacro(delete):
-  ## Deletes any rows that match the query
+  x.whereExpr
 
