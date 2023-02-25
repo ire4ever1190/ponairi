@@ -10,4 +10,4 @@ srcDir        = "src"
 # Dependencies
 
 requires "nim >= 1.6.0"
-requires "https://github.com/PhilippMDoerner/ndb.nim#59043f7"
+requires "lowdb >= 0.1.1"
