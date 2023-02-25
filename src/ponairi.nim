@@ -4,7 +4,7 @@ import std/macrocache
 import std/strutils
 import std/options
 import std/times
-import ndb/sqlite
+import lowdb/sqlite
 
 import ponairi/[
   pragmas,
@@ -26,7 +26,7 @@ if modifying the schema
 
 After installing the library through nimble (or any other means) you'll want to open a connection with [newConn] which will be used
 for all interactions with the database.
-While this library does just use the connection object from [ndb](https://github.com/xzfc/ndb.nim), it is best to use
+While this library does just use the connection object from [lowdb](https://github.com/xzfc/lowdb.nim), it is best to use
 this since it configures certain settings to make things like foreign keys work correctly
 
 ```nim
@@ -114,7 +114,7 @@ db.delete(Person(name: "Jake"))
 Custom types can be added by implementing three functions
 
 - [sqlType]: Returns a string that will be the type to use in the SQL table
-- [dbValue]: For converting from the type to a value the database can read (See [ndb DbValue](https://xzfc.github.io/ndb.nim/v0.19.8/sqlite.html#DbValue))
+- [dbValue]: For converting from the type to a value the database can read (See [lowdb DbValue](https://philippmdoerner.github.io/lowdb/lowdb/sqlite.html#DbValue))
 - [to]: For converting from the database value back to the Nim type
 
 Here is an example of implementing these for [SecureHash](https://nim-lang.org/docs/sha1.html#SecureHash).
