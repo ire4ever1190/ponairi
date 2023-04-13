@@ -54,11 +54,11 @@ for order in db.find(seq[Order]):
 
 # Find first one that matches a query.
 # Tables are named same as the object
-echo db.find(Order, "SELECT * FROM Order WHERE customer = ?", john.id)
+echo db.find(Order, sql"SELECT * FROM Order WHERE customer = ?", john.id)
 
 # Option[T] can also be used if the query mighn't return anything
 import std/options
-assert db.find(Option[Order], "SELECT * FROM Order WHERE customer = 99999").isNone
+assert db.find(Option[Order], sql"SELECT * FROM Order WHERE customer = 99999").isNone
 ```
 
 Currently there is some support for automatically loading objects through references (This will be expanded on in future)
@@ -76,7 +76,7 @@ Updating is currently only support via `upsert()` which either inserts an object
 ```nim
 tableOrder.name = "Better table"
 db.upsert(tableOrder)
-assert db.find(Order, "SELECT * FROM Order WHERE id = ?", tableOrder.id).name == "Better table"
+assert db.find(Order, sql"SELECT * FROM Order WHERE id = ?", tableOrder.id).name == "Better table"
 ```
 
 ### Delete
