@@ -127,8 +127,6 @@ type
     ## This is a component of a query, stores the type that the SQL would return
     ## and also the SQL that it is
 
-  SqlColumnOrder = QueryPart[SortOrder]
-
 func tableName[T](x: typedesc[T]): string =
   result = $T
 
@@ -157,7 +155,7 @@ makeOrder(nullsLast, NullsLast):
   ## Makes `nil` values get returned last
   ## Column must be optional
 
-func build(order: openArray[SqlColumnOrder]): string =
+func build(order: openArray[ColumnOrder]): string =
   ## Returns the ORDER BY clause. You probably won't need to use this
   ## But will be useful if you want to create your own functions
   if order.len > 0:
@@ -171,7 +169,7 @@ func build(order: openArray[SqlColumnOrder]): string =
     ]
     result = "ORDER BY "
     result.add order.seperateBy(", ") do (x: auto) -> string:
-      x.string
+       x.column & " " & toStr[x.order]
 #
 # Functions that build the query
 #
@@ -179,7 +177,7 @@ func build(order: openArray[SqlColumnOrder]): string =
 func pred*(x: QueryPart[int], y = 1): QueryPart[int] =
   result = QueryPart[int]($(x.string.parseInt() - y))
 
-template `..<`*(a, b: QueryPart[int]): HSlice[QueryPart[int], QueryPart[int]] =
+template `..<`*(a, b: QueryPart[int]): Slice[QueryPart[int]] =
   ## Overload for `..<` to work with `QueryPart[int]`
   a .. pred(b)
 
@@ -246,7 +244,7 @@ func contains*[T](items: openArray[QueryPart[T]], q: QueryPart[T]): QueryPart[bo
   sqlArray &= ")"
   result = QueryPart[bool](fmt"{q.string} IN {sqlArray}")
 
-func contains*[T: SomeInteger](range: HSlice[QueryPart[T], QueryPart[T]], number: QueryPart[T]): QueryPart[bool] =
+func contains*[T: SomeInteger](range: Slice[QueryPart[T]], number: QueryPart[T]): QueryPart[bool] =
   ## Checks if a number is within a range
   result = QueryPart[bool](fmt"{number.string} BETWEEN {range.a.string} AND {range.b.string}")
 
@@ -386,10 +384,12 @@ macro where*(table: typedesc, query: untyped): TableQuery =
         id {.primary, autoIncrement.}: int
         name: string
         price: float # I know float is bad for price, this is an example
-
+        
+    let name = "Chair"
     discard ShopItem.where(
       # Normal Nim code gets put in here which gets converted into SQL.
-      (id == 9 and name.len > 9) or price == 0.0 or name == ?string
+      # Variables are passed like {var}
+      (id == 9 and name.len > 9) or price == 0.0 or name == {name}
     )
     # Gets compiled into
     # ShopItem.id == 9 AND LENGTH(ShopItem.name) > 9 OR ShopItem.price == 0.0 OR ShopItem.name == ?1
@@ -477,20 +477,28 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): Tab
 # Overloads to use TableQuery
 #
 
-proc findImpl[T](db; q: TableQuery[T], order: static openArray[SqlColumnOrder]): T =
+proc findImpl[T](db; q: TableQuery[T], order: static seq[ColumnOrder]): T =
   const
     table = T.tableName
-    order = order.build()
-  let query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr}"
+    orderBy = order.build()
+  # static:
+    # Check that the ordering is valid
+    # for o in order:
+      # echo o
+  let query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr} {orderBy}"
+  echo query.string
   db.find(T, query, q.params)
 
-macro find[T](db; q: TableQuery[T], order: varargs[untyped]): T =
+macro find*[T](db; q: TableQuery[T], order: varargs[ColumnOrder]): T =
   ## Finds any row/rows that match the query
   # Convert the order into QueryPart
   let orderCalls = nnkBracket.newTree()
-  # for o in order:
-    # orderCalls
-  result = newCall(bindSym"findImpl", q, nnkBracket.newTree())
+  for o in order:
+    orderCalls &= o
+  # result = genAst(findCall = bindSym"findImpl", db, q, orderCalls = orderCalls.prefix("@")):
+    # const calls = orderCalls
+    # findCall(db, q, calls)
+  result = newCall(bindSym"findImpl", db, q, orderCalls.prefix("@"))
 
 
 proc exists*[T](db; q: TableQuery[T]): bool =
