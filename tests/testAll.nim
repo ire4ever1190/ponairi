@@ -1,7 +1,8 @@
 import std/[
   unittest,
   options,
-  strformat
+  strformat,
+  strutils
 ]
 import ponairi {.all.}
 
@@ -26,6 +27,11 @@ type
     another {.references: Person.name, cascade.}: string
     price: float
 
+  Model = object
+    title {.index.}: string
+    tag {.index: "extra_idx".}: string
+    info {.index: "extra_idx".}: string
+
 func `$`(d: Dog): string =
   if d != nil:
     fmt"{d.name} -> {d.owner}"
@@ -35,10 +41,10 @@ func `$`(d: Dog): string =
 func `==`(a, b: Dog): bool =
   a.name == b.name and a.owner == b.owner
 
-let db = newConn(":memory:")
+let db = newConn("tmp.db")
 
 test "Table creation":
-  db.create(Person, Dog, Something)
+  db.create(Person, Dog, Something, Model)
 
 const
   jake = Person(name: "Jake", age: 42, status: Alive)
@@ -183,16 +189,26 @@ test "Tuples to handle joins":
       check results[index][1] == "Jake"
 
 test "Transaction template":
-  var thrown = false
   let garry = Person(name: "Garry", age: 101, status: Alive)
-  try:
+  expect CatchableError:
     db.transaction:
       db.insert garry
       raise (ref CatchableError)()
-  except CatchableError:
-    thrown = true
 
-  check thrown
   check not db.exists garry
+
+suite "Index":
+  db.create(Model)
+
+  proc usesIndex(query, index: string): bool =
+    let plan = db.explain(sql(query))
+    checkpoint plan
+    fmt"USING INDEX {index}" in plan
+
+  test "Index is used for single column":
+    check "SELECT * FROM Model WHERE title = 'test'".usesIndex("Model_title")
+
+  test "Index is used for multi column":
+    check "SELECT * FROM Model WHERE tag = 'a' AND info = 'b'".usesIndex("Model_extra_idx")
 
 close db
