@@ -1,9 +1,12 @@
-import std/macros
-import std/strformat
-import std/macrocache
-import std/strutils
-import std/options
-import std/times
+import std/[
+  macros,
+  strformat,
+  macrocache,
+  strutils,
+  options,
+  times,
+  tables
+]
 import lowdb/sqlite
 
 import ponairi/[
@@ -244,16 +247,24 @@ proc getProperties(impl: NimNode): seq[Property] =
       result &= newProp
 
 template fieldPairs(x: ref object): untyped = fieldPairs(x[])
+
 macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   ## Returns a string that can be used to create a table in a database
-  let impl = T.lookupImpl()
-  result = newLit(fmt"CREATE TABLE IF NOT EXISTS {impl.getName()} (")
+  let
+    impl = T.lookupImpl()
+    tableName = impl.getName()
+  # TODO: Try and remember why I create a string node instead of making string directly
+  result = newLit(fmt"CREATE TABLE IF NOT EXISTS {tableName} (")
   let properties = impl.getProperties()
-  # Keep list of primary keys so that we can generate them last.
-  # This enables composite primary keys
-  var primaryKeys: seq[string]
-  # Sqlite only allows for one auto increment primary key
-  var hasAutoPrimary = false
+  var
+    # Keep list of primary keys so that we can generate them last.
+    # This enables composite primary keys
+    primaryKeys: seq[string]
+    # Track what indexes we need to build after the table
+    # Mapping of index name -> columns
+    indexes: Table[string, tuple[unique: bool, columns: seq[string]]]
+    # Sqlite only allows for one auto increment primary key
+    hasAutoPrimary = false
   # We now generate all the columns
   for i in 0..<properties.len:
     let property = properties[i]
@@ -265,30 +276,48 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
     if not property.isOptional():
       result.join " NOT NULL"
     # Go through pragmas and see how we need to change the column definition
+    # This needs to be done in a loop so we can properly line up pragmas with their arguments
+    for pragma in property.pragmas:
+      case nimIdentNormalize pragma.name
+      of "index", "uniqueindex":
+        let
+          name = if pragma.parameters[0].strVal.isEmptyOrWhitespace(): property.name
+                 else: pragma.parameters[0].strVal
+          isUnique = pragma.name.eqIdent("uniqueIndex")
+          extraKeyPrefix = if isUnique: "unique_" else: ""
+          key = fmt"""{tableName}_index_{extraKeyPrefix}{name}"""
+        if key notin indexes:
+          indexes[key] = (isUnique, @[property.name])
+        else:
+          indexes[key].columns &= property.name
+      of "references":
+         # Check the reference has correct syntax
+        let refParam = pragma.parameters[0]
+        if refParam.kind != nnkDotExpr:
+          "Reference must be in object.field notation".error(refParam)
+
+        result.join fmt" REFERENCES {refParam[0].strVal}({refParam[1].strVal})"
+        if "cascade" in property.pragmas:
+          result.join " ON DELETE CASCADE "
+
+    # Primary keys and autoIncrement need to be handled together
+    # so we work with them outside the loop
     if "autoIncrement" in property.pragmas and "primary" in property.pragmas:
       if hasAutoPrimary:
         "Only one auto incremented primary key is allowed".error(impl[0])
       hasAutoPrimary = true
       result.join " PRIMARY KEY AUTOINCREMENT"
-
     elif "primary" in property.pragmas:
       primaryKeys &= property.name
 
-    elif "references" in property.pragmas:
-      # Check the reference has correct syntax
-      let pragma = property.pragmas["references"]
-      let refParam = pragma.parameters[0]
-      if refParam.kind != nnkDotExpr:
-        "Reference must be in object.field notation".error(refParam)
-
-      result.join fmt" REFERENCES {refParam[0].strVal}({refParam[1].strVal})"
-      if "cascade" in property.pragmas:
-        result.join " ON DELETE CASCADE "
     if i < properties.len - 1:
       result.join ", "
   if primaryKeys.len > 0:
     result.join ", PRIMARY KEY (" & primaryKeys.join(", ") & ")"
-  result.join ")"
+  result.join ");"
+  # Add in the indexes
+  for index, (unique, columns) in indexes:
+    result.join fmt"""CREATE INDEX IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
   result = sqlLit(result)
 
 macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
@@ -419,7 +448,10 @@ proc create*[T: SomeTable](db; table: typedesc[T]) =
     db.create Something
   #==#
   const schema = createSchema(T)
-  db.exec(schema)
+  # TODO: Write PR for lowdb to run multiple sql queries at once
+  for part in schema.string.split(';'):
+    if not part.isEmptyOrWhitespace():
+      db.exec(sql part)
 
 macro create*(db; tables: varargs[typed]) =
   ## Creates multiple classes at once
@@ -554,6 +586,10 @@ proc find*[T: SomeTable | tuple](db; table: typedesc[seq[T]], query: SqlQuery, a
 proc find*[T: SomeTable](db; table: typedesc[seq[T]]): seq[T] =
   for row in db.find(table):
     result &= row
+
+proc explain*(db; query: SqlQuery): string =
+  ## Returns the [query plan](https://www.sqlite.org/eqp.html) for a query
+  db.getRow(sql("EXPLAIN QUERY PLAN " & query.string)).get()[3].to(result)
 
 macro createUniqueWhere[T: SomeTable](table: typedesc[T]): (bool, string) =
   ## Returns a WHERE clause that can be used to uniquely identify an object in

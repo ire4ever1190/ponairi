@@ -49,6 +49,7 @@ func `[]`*(items: seq[Pragma], name: string): Pragma =
   for item in items:
     if item.name.eqIdent(name): return item
 
+
 proc getName*(n: NimNode): string =
   case n.kind
   of nnkIdent, nnkSym:
