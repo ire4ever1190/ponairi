@@ -31,6 +31,7 @@ type
     title {.index.}: string
     tag {.index: "extra_idx".}: string
     info {.index: "extra_idx".}: string
+    extra {.uniqueIndex.}: string
 
 func `$`(d: Dog): string =
   if d != nil:
@@ -41,7 +42,7 @@ func `$`(d: Dog): string =
 func `==`(a, b: Dog): bool =
   a.name == b.name and a.owner == b.owner
 
-let db = newConn("tmp.db")
+let db = newConn(":memory:")
 
 test "Table creation":
   db.create(Person, Dog, Something, Model)
@@ -206,9 +207,12 @@ suite "Index":
     fmt"USING INDEX {index}" in plan
 
   test "Index is used for single column":
-    check "SELECT * FROM Model WHERE title = 'test'".usesIndex("Model_title")
+    check "SELECT * FROM Model WHERE title = 'test'".usesIndex("Model_index_title")
 
   test "Index is used for multi column":
-    check "SELECT * FROM Model WHERE tag = 'a' AND info = 'b'".usesIndex("Model_extra_idx")
+    check "SELECT * FROM Model WHERE tag = 'a' AND info = 'b'".usesIndex("Model_index_extra_idx")
+
+  test "Unique index can be used":
+    check "SELECT * FROM Model WHERE extra = 'foo'".usesIndex("Model_index_unique_extra")
 
 close db
