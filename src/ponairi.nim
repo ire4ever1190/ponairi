@@ -262,7 +262,7 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
     primaryKeys: seq[string]
     # Track what indexes we need to build after the table
     # Mapping of index name -> columns
-    indexes: Table[string, seq[string]]
+    indexes: Table[string, tuple[unique: bool, columns: seq[string]]]
     # Sqlite only allows for one auto increment primary key
     hasAutoPrimary = false
   # We now generate all the columns
@@ -276,45 +276,47 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
     if not property.isOptional():
       result.join " NOT NULL"
     # Go through pragmas and see how we need to change the column definition
-    # Check if we need to build an index for the column
-    if "index" in property.pragmas:
-      let
-        pragma = property.pragmas["index"]
-        name = if pragma.parameters[0].strVal.isEmptyOrWhitespace(): property.name
-               else: pragma.parameters[0].strVal
-        key = fmt"{tableName}_{name}"
-      if key notin indexes:
-        indexes[key] = @[property.name]
-      else:
-        indexes[key] &= property.name
+    # This needs to be done in a loop so we can properly line up pragmas with their arguments
+    for pragma in property.pragmas:
+      case nimIdentNormalize pragma.name
+      of "index", "uniqueindex":
+        let
+          name = if pragma.parameters[0].strVal.isEmptyOrWhitespace(): property.name
+                 else: pragma.parameters[0].strVal
+          isUnique = pragma.name.eqIdent("uniqueIndex")
+          extraKeyPrefix = if isUnique: "unique_" else: ""
+          key = fmt"""{tableName}_index_{extraKeyPrefix}{name}"""
+        if key notin indexes:
+          indexes[key] = (isUnique, @[property.name])
+        else:
+          indexes[key].columns &= property.name
+      of "references":
+         # Check the reference has correct syntax
+        let refParam = pragma.parameters[0]
+        if refParam.kind != nnkDotExpr:
+          "Reference must be in object.field notation".error(refParam)
 
+        result.join fmt" REFERENCES {refParam[0].strVal}({refParam[1].strVal})"
+        if "cascade" in property.pragmas:
+          result.join " ON DELETE CASCADE "
+
+    # Primary keys and autoIncrement need to be handled together
+    # so we work with them outside the loop
     if "autoIncrement" in property.pragmas and "primary" in property.pragmas:
       if hasAutoPrimary:
         "Only one auto incremented primary key is allowed".error(impl[0])
       hasAutoPrimary = true
       result.join " PRIMARY KEY AUTOINCREMENT"
-
     elif "primary" in property.pragmas:
       primaryKeys &= property.name
 
-    elif "references" in property.pragmas:
-      # Check the reference has correct syntax
-      let pragma = property.pragmas["references"]
-      let refParam = pragma.parameters[0]
-      if refParam.kind != nnkDotExpr:
-        "Reference must be in object.field notation".error(refParam)
-
-      result.join fmt" REFERENCES {refParam[0].strVal}({refParam[1].strVal})"
-      if "cascade" in property.pragmas:
-        result.join " ON DELETE CASCADE "
     if i < properties.len - 1:
       result.join ", "
   if primaryKeys.len > 0:
     result.join ", PRIMARY KEY (" & primaryKeys.join(", ") & ")"
   result.join ");"
   # Add in the indexes
-  for index, columns in indexes:
-    echo fmt"""CREATE INDEX IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
+  for index, (unique, columns) in indexes:
     result.join fmt"""CREATE INDEX IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
   result = sqlLit(result)
 
