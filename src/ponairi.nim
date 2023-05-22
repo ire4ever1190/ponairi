@@ -7,7 +7,9 @@ import std/[
   times,
   tables
 ]
-import lowdb/sqlite
+
+import lowdb/sqlite {.all.}
+from db_connector/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
 
 import ponairi/[
   pragmas,
@@ -217,7 +219,7 @@ template transaction*(db; body: untyped) =
   try:
     body
     db.commit()
-  except CatchableError, Defect: # Should I catch Defect?
+  except CatchableError, Defect:
     db.rollback()
     raise
 
@@ -364,31 +366,64 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[str
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
-template insertImpl() =
-  const query {.inject.} = createInsert(T)
+template makeParams[T](item: T): seq[DbValue] =
   var params {.inject.}: seq[DbValue]
   for name, field in item.fieldPairs:
     # Insert fields, but ignore anything with autoIncrement since we want the database to generate that
     when not field.hasCustomPragma(autoIncrement):
       params &= dbValue(field)
+  params
 
 proc insert*[T: SomeTable](db; item: T) =
   ## Inserts an object into the database
-  insertImpl()
-  db.exec(query, params)
+  const query = createInsert(T)
+  db.exec(query, makeParams item)
 
 proc insertID*[T: SomeTable](db; item: T): int64 =
   ## Inserts an object and returns the auto generated ID
-  insertImpl()
-  db.insertID(query, params)
+  const query = createInsert(T)
+  db.insertID(query, makeParams item)
+
+template checkSQL(x: bool) =
+  if not x:
+    dbError(db)
+
+template checkSQL(x: Option) =
+  if isNone(x):
+    dbError(db)
+
+template checkSQL(x: int32) =
+  if x != SQLITE_OK:
+    dbError(db)
 
 proc insert*[T: SomeTable](db; items: openArray[T]) =
   ## Inserts the list of items into the database.
   ## This gets ran in a transaction so if an error happens then none
   ## of the items are saved to the database
+  const query = createInsert(T)
   db.transaction:
+    # We build the statement, then reuse it when inserting.
+    # This duplicates a lot of code from lowdb :(
+    # TODO: Maybe try and get something like this moved upstream to lowdb
+    assert(not db.isNil, "Database not connected.")
+    var stmt: Pstmt
+    defer:
+      # Make sure to clean up
+      if stmt != nil:
+        checkSQL tryFinalize(stmt)
+    checkSQL prepare_v2(db, query.cstring, query.string.len.cint, stmt, nil)
+    # Now we need to
+    #  - bind args from items
+    #  - run query
+    #  - reset statement
+    # for each item
     for item in items:
-      db.insert item
+      # TODO: Make PR to remove query, it isn't used
+      checkSQL db.bindArgs(stmt, query, makeParams(item))
+      # Run the statement
+      discard next(stmt)
+      checkSQL reset(stmt)
+
 
 proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
   const query = createUpsert(T, exclude)
