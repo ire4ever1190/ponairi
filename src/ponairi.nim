@@ -9,7 +9,10 @@ import std/[
 ]
 
 import lowdb/sqlite {.all.}
-from db_connector/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
+when (NimMajor, NimMinor) >= (1, 9):
+  from db_connector/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
+else:
+  from std/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
 
 import ponairi/[
   pragmas,
@@ -366,13 +369,27 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[str
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
-template makeParams[T](item: T): seq[DbValue] =
-  var params {.inject.}: seq[DbValue]
+func numFields(x: typedesc): int {.compileTime.} =
+  ## Returns number of fields that an object has
+  for _, _ in x().fieldPairs:
+    result += 1
+
+func numNormalFields(x: typedesc): int =
+  ## This is only used by makeParams. It returns number of fields that
+  ## are not auto incremented
+  for name, field in x().fieldPairs:
+    when not field.hasCustomPragma(autoIncrement):
+      result += 1
+
+proc makeParams[T](item: T): array[T.numNormalFields, DbValue] {.inline.} =
+  ## Builds a list of parameters from an object
+  ## Excludes any auto incremented fields since they shouldn't be inserted
+  var i = 0
   for name, field in item.fieldPairs:
     # Insert fields, but ignore anything with autoIncrement since we want the database to generate that
     when not field.hasCustomPragma(autoIncrement):
-      params &= dbValue(field)
-  params
+      result[i] = dbValue(field)
+      i += 1
 
 proc insert*[T: SomeTable](db; item: T) =
   ## Inserts an object into the database
@@ -396,46 +413,58 @@ template checkSQL(x: int32) =
   if x != SQLITE_OK:
     dbError(db)
 
+template execMany[T](db; query: SqlQuery, items: openArray[T], map: untyped) =
+  ## Implement of `exec` that runs the same query with multiple items.
+  ## This is faster than looping since it reuses the prepared statement.
+  ## Not public yet, might make it public in the future.
+  ## `map` is a block of code that takes the implicit `item` variable and converts it into dbParams
+  # We build the statement, then reuse it when inserting.
+  # This duplicates a lot of code from lowdb :(
+  # TODO: Maybe try and get something like this moved upstream to lowdb
+  assert(not db.isNil, "Database not connected.")
+  var stmt: Pstmt
+  defer:
+    # Make sure to clean up
+    if stmt != nil:
+      checkSQL tryFinalize(stmt)
+  checkSQL prepare_v2(db, query.cstring, query.string.len.cint, stmt, nil)
+  # Now we need to
+  #  - bind args from items
+  #  - run query
+  #  - reset statement
+  # for each item
+  for item {.inject.} in items:
+    # TODO: Make PR to remove query, it isn't used
+    checkSQL db.bindArgs(stmt, query, map)
+    # Run the statement
+    discard next(stmt)
+    checkSQL reset(stmt)
+
 proc insert*[T: SomeTable](db; items: openArray[T]) =
   ## Inserts the list of items into the database.
   ## This gets ran in a transaction so if an error happens then none
   ## of the items are saved to the database
   const query = createInsert(T)
   db.transaction:
-    # We build the statement, then reuse it when inserting.
-    # This duplicates a lot of code from lowdb :(
-    # TODO: Maybe try and get something like this moved upstream to lowdb
-    assert(not db.isNil, "Database not connected.")
-    var stmt: Pstmt
-    defer:
-      # Make sure to clean up
-      if stmt != nil:
-        checkSQL tryFinalize(stmt)
-    checkSQL prepare_v2(db, query.cstring, query.string.len.cint, stmt, nil)
-    # Now we need to
-    #  - bind args from items
-    #  - run query
-    #  - reset statement
-    # for each item
-    for item in items:
-      # TODO: Make PR to remove query, it isn't used
-      checkSQL db.bindArgs(stmt, query, makeParams(item))
-      # Run the statement
-      discard next(stmt)
-      checkSQL reset(stmt)
+    db.execMany(query, items):
+      makeParams(item)
 
+proc dbValueArray[T: SomeTable](item: T): array[T.numFields, DbValue] {.inline.} =
+  ## Converts an item into an array of DbValues
+  var i = 0
+  for field, value in item.fieldPairs:
+    result[i] = dbValue(value)
+    i += 1
 
 proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
   const query = createUpsert(T, exclude)
-  var params: seq[DbValue]
-  for name, field in item.fieldPairs:
-    params &= dbValue(field)
-  db.exec(query, params)
+  db.exec(query, dbValueArray(item))
 
 proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
+  const query = createUpsert(T, exclude)
   db.transaction:
-    for item in items:
-      db.upsertImpl(item, exclude)
+    db.execMany(query, items):
+      dbValueArray(item)
 
 # We use a macro so we can get the items as nodes.
 # Means that we can properly assign compile time errors to them
