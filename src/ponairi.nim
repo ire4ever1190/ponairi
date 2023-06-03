@@ -181,6 +181,17 @@ func sqlType*(T: typedesc[SomeFloat]): string {.inline.} = "REAL"
 func sqlType*(T: typedesc[Time]): string {.inline.} = "INTEGER"
 func sqlType*(T: typedesc[DateTime]): string {.inline.} = "TEXT"
 
+proc dbValue*(b: bool): DbValue =
+  result = DbValue(kind: dvkInt, i: if b: 1 else: 0)
+
+proc dbValue*(d: DateTime): DbValue =
+  ## Stores the date as an ISO-8601 timestamp
+  result = DbValue(kind: dvkString, s: d.utc.format(dateFormat))
+
+proc dbValue*(t: Time): DbValue =
+  ## Stores the time as a UNIX timestamp
+  result = DbValue(kind: dvkInt, i: t.toUnix())
+
 using db: DbConn
 using args: varargs[DbValue, dbValue]
 
@@ -369,37 +380,41 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[str
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
-func numFields(x: typedesc): int {.compileTime.} =
-  ## Returns number of fields that an object has
-  for _, _ in x().fieldPairs:
-    result += 1
 
-func numNormalFields(x: typedesc): int =
-  ## This is only used by makeParams. It returns number of fields that
-  ## are not auto incremented
-  for name, field in x().fieldPairs:
-    when not field.hasCustomPragma(autoIncrement):
-      result += 1
+template countFields(x: typedesc, checker: untyped = true): int {.dirty.} =
+  bind fieldPairs
+  # Nim has a bug where I couldn't use a temp variable in a static context
+  # So instead I make a static proc and call that
+  proc doCounting(): int =
+    for name, field in fieldPairs(x()):
+      when checker:
+        result += 1
+  doCounting()
 
-proc makeParams[T](item: T): array[T.numNormalFields, DbValue] {.inline.} =
-  ## Builds a list of parameters from an object
-  ## Excludes any auto incremented fields since they shouldn't be inserted
-  var i = 0
-  for name, field in item.fieldPairs:
-    # Insert fields, but ignore anything with autoIncrement since we want the database to generate that
-    when not field.hasCustomPragma(autoIncrement):
-      result[i] = dbValue(field)
+template makeParams[T](item: T, checker: untyped = true): untyped {.dirty.} =
+  ## Converts an object into an array of `DBValue`. A checker can be passed
+  ## to ignore certain fields.
+  bind countFields
+  bind fieldPairs
+  const numFields = countFields(T, checker)
+  var
+    res: array[numFields, DbValue]
+    i = 0
+  for name, field in fieldPairs(item):
+    when checker:
+      res[i] = dbValue(field)
       i += 1
+  res
 
 proc insert*[T: SomeTable](db; item: T) =
   ## Inserts an object into the database
   const query = createInsert(T)
-  db.exec(query, makeParams item)
+  db.exec(query, makeParams(item, not field.hasCustomPragma(autoIncrement)))
 
 proc insertID*[T: SomeTable](db; item: T): int64 =
   ## Inserts an object and returns the auto generated ID
   const query = createInsert(T)
-  db.insertID(query, makeParams item)
+  db.insertID(query, makeParams(item, not field.hasCustomPragma(autoIncrement)))
 
 template checkSQL(x: bool) =
   if not x:
@@ -449,22 +464,15 @@ proc insert*[T: SomeTable](db; items: openArray[T]) =
     db.execMany(query, items):
       makeParams(item)
 
-proc dbValueArray[T: SomeTable](item: T): array[T.numFields, DbValue] {.inline.} =
-  ## Converts an item into an array of DbValues
-  var i = 0
-  for field, value in item.fieldPairs:
-    result[i] = dbValue(value)
-    i += 1
-
 proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
   const query = createUpsert(T, exclude)
-  db.exec(query, dbValueArray(item))
+  db.exec(query, makeParams(item))
 
 proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray[string]] = []) =
   const query = createUpsert(T, exclude)
   db.transaction:
     db.execMany(query, items):
-      dbValueArray(item)
+      makeParams(item)
 
 # We use a macro so we can get the items as nodes.
 # Means that we can properly assign compile time errors to them
@@ -531,18 +539,6 @@ proc drop*[T: object](db; table: typedesc[T]) =
   ## Drops a table from the database
   const stmt = sql("DROP TABLE IF EXISTS " & $T)
   db.exec(stmt)
-
-proc dbValue*(b: bool): DbValue =
-  result = DbValue(kind: dvkInt, i: if b: 1 else: 0)
-
-proc dbValue*(d: DateTime): DbValue =
-  result = DbValue(kind: dvkString, s: d.utc.format(dateFormat))
-
-proc dbValue*(t: Time): DbValue =
-  result = DbValue(kind: dvkInt, i: t.toUnix())
-
-func dbValue*(e: enum): DbValue =
-  result = DbValue(kind: dvkInt, i: e.ord)
 
 func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
