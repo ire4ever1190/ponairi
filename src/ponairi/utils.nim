@@ -1,4 +1,7 @@
-import macros
+import std/[
+  strformat,
+  macros
+]
 
 func seperateBy*[T](items: openArray[T], sep: string,
                    handler: proc (x: T): string): string {.effectsOf: handler.} =
@@ -25,3 +28,7 @@ template findIt*(s, pred: untyped): int =
   if result == s.len:
     result = -1
   result
+
+func doesntExistErr*(field, table: string): string =
+  ## Returns formatted error for when a field doesn't exist
+  fmt"{field} doesn't exist in {table}"

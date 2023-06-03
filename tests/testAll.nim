@@ -5,59 +5,9 @@ import std/[
   strformat,
   algorithm
 ]
+import data
 import ponairi
 
-when (NimMajor, NimMinor) < (1, 7):
-  {.experimental: "overloadableEnums".}
-
-type
-  Status = enum
-    Alive
-    Dead
-    Undead # Our schema supports zombie apocalypse
-
-  Person = object
-    name {.primary.}: string
-    age: int
-    status*: Status
-    extraInfo: Option[string]
-
-  Dog* = ref object
-    name {.primary.}: string
-    owner* {.references(Person.name), cascade.}: string
-
-  Something* = object
-    name*, age*: string
-    another {.references: Person.name, cascade.}: string
-    price: float
-
-func `$`(d: Dog): string =
-  if d != nil:
-    fmt"{d.name} -> {d.owner}"
-  else:
-    "nil"
-
-func `==`(a, b: Dog): bool =
-  a.name == b.name and a.owner == b.owner
-
-
-
-
-
-const
-  jake = Person(name: "Jake", age: 42, status: Alive)
-  john = Person(name: "John", age: 45, status: Dead, extraInfo: some "Test")
-  people = [jake, john]
-
-proc `<`(a, b: Person): bool =
-  a.age < b.age
-
-let jakesDogs = [
-  Dog(owner: "Jake", name: "Dog"),
-  Dog(owner: "Jake", name: "Bark"),
-  Dog(owner: "Jake", name: "Woof"),
-  Dog(owner: "Jake", name: "something")
-]
 
 suite "Base API":
   let db = newConn(":memory:")
@@ -107,9 +57,6 @@ suite "Base API":
   test "Upsert a sequence":
     db.upsert(jakesDogs)
 
-  test "Upsert check fields exist":
-    check not compiles(db.upsert(jake, test))
-
   test "Finding to tuples":
     let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
     for row in pairs:
@@ -124,6 +71,10 @@ suite "Base API":
     db.upsert(dog)
     check dog in db.find(seq[Dog])
     db.upsert(oldVal)
+
+  test "Upsert check fields exist":
+    # This isn't in testament tests since it kept getting the file wrong
+    check not compiles(db.upsert(jake, test))
 
   test "Finding to tuples":
     let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
@@ -208,24 +159,10 @@ suite "Query builder":
       exists(Dog.where(owner == "Jake")))
     )
 
-  test "Can't use property that doesn't exist":
-    check not compiles(Person.where(unknown == "test"))
-
-  test "Scope changes when directly accessing table":
-    check not compiles(Person.where(
-      exists(Dog.where(owner == Person.owner))
-    ))
-
-  test "Can only access tables that are in scope":
-    check not compiles(Person.where(Dog.name == "test"))
-
   test "Can access outer table in inner call":
     check db.find(seq[Person].where(
       exists(Dog.where(owner == Person.name))
     )) == @[jake]
-
-  test "Types are checked":
-    check not compiles(db.find(Person.where(name == 9)))
 
   test "Can perform nil checks":
     check db.find(seq[Person].where(extraInfo.isSome)) == @[jake]
@@ -257,10 +194,6 @@ suite "Query builder":
       name == {name} and age == {age} and
       name == {name} and age == {age}
     )) == jake
-
-  test "Type mismatches don't compile":
-    let num = 9
-    check not compiles(db.find(Person.where(name == {num})))
 
   test "Can delete":
     db.delete(Person.where(age == 42))

@@ -5,9 +5,7 @@ import std/[
   options,
   typetraits,
   macrocache,
-  sugar,
   strutils,
-  genasts,
   sequtils
 ]
 
@@ -308,7 +306,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
     else:
       let typ = currentTable.getType(node)
       if typ.isNone:
-        fmt"{node} doesn't exist in {currentTable}".error(node)
+        doesntExistErr($node, $currentTable).error(node)
       return initQueryPartNode(typ.unsafeGet, fmt"{currentTable.strVal}.{node.strVal}")
   of nnkStrLit:
     return initQueryPartNode(string, fmt"'{node.strVal}'")
@@ -461,7 +459,7 @@ proc checkFieldOrdering(x: typedesc, sortings: openArray[ColumnOrder]) {.compile
   for order in sortings:
     echo obj.hasProperty(order.column)
     if not obj.hasProperty(order.column):
-      fmt"{order.column} doesn't exist in {obj}".error(order.line)
+      doesntExistErr(order.column, obj).error(order.line)
 
     # Check if type can actually be nullable
     if order.order in {NullsFirst, NullsLast}:

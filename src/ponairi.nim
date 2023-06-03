@@ -9,7 +9,8 @@ import ndb/sqlite except `?`
 import ponairi/[
   pragmas,
   queryBuilder,
-  macroUtils
+  macroUtils,
+  utils
 ]
 
 ##[
@@ -301,7 +302,9 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[str
   # Check all the excluded properties exist
   for prop in excludeProps:
     if not table.hasProperty(prop):
-      fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
+      doesntExistErr($prop, impl.getName()).error(prop)
+      return newLit ""
+
     excludes &= prop.strVal
 
   for property in properties:
@@ -384,7 +387,10 @@ macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
       "Only properties can be excluded".error(prop)
     # Since we can't lookup the implementation of T here we instead
     # just build a list of props and then check if they exist later in createUpsert
-    excludedProps &= newLit prop.strVal
+    let name = newLit prop.strVal
+    name.copyLineInfo(prop)
+    excludedProps &= name
+  excludedProps.copyLineInfo(excludes)
   result = newCall(bindSym"upsertImpl", db, item, excludedProps)
 
 proc create*[T: SomeTable](db; table: typedesc[T]) =
