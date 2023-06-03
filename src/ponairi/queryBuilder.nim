@@ -7,7 +7,8 @@ import std/[
   macrocache,
   sugar,
   strutils,
-  genasts
+  genasts,
+  sequtils
 ]
 
 import macroUtils, utils
@@ -120,12 +121,19 @@ type
     # This is a constant that I probably could've stored in the type signature.
     # But that made life very difficult
     whereExpr*: string
-    params*: seq[DbValue]
+    params*: int # Index into queryParameters
     order*: seq[ColumnOrder]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
     ## and also the SQL that it is
+
+const queryParameters = CacheSeq"ponairi.parameters"
+  ## We need to store the NimNode of parameters (Not the actual value)
+  ## so that we can reconstruct the parameters.
+  ## Each query is given an index which corresponds to the parameters for it
+  ## Yes this is a hacky method
+  ## but it was the best I could come up with.
 
 func tableName[T](x: typedesc[T]): string =
   result = $T
@@ -270,10 +278,15 @@ func initQueryPartNode(x: NimNode, val: string): NimNode =
 func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
-func sqlParam[T](call: typedesc[T], index: int): QueryPart[T] =
-  ## Adds in a SQL query parameter that relates to a certain index.
-  ## The call should just be a type of what it expects
-  result = QueryPart[T]("?" & $index)
+
+macro addParam[T](param: T, paramsIdx, idx: static[int], found: static[bool]): QueryPart[T] =
+  ## Internal proc that saves the param info into a query.
+  ## This is done so we get the actual symbol and dont run into mismatches later on.
+  ## It then returns what the type of the param is so teh rest of the system stays typesafe
+  if not found:
+    queryParameters[paramsIdx] &= param
+  result = quote do:
+    QueryPart[typeof(`param`)]("?" & $`idx`)
 
 proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
                   params: var seq[NimNode]): NimNode =
@@ -284,7 +297,7 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   template checkAfter(start: int) =
     ## Checks the rest of the nodes starting with `start`
     for i in start..<node.len:
-        result[i] = result[i].checkSymbols(currentTable, scope, params)
+      result[i] = result[i].checkSymbols(currentTable, scope, params)
 
   result = node
   case node.kind
@@ -306,18 +319,16 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   of nnkDotExpr:
     # Bit of a hacky check, but only assume table access when the thing they are accessing
     # starts with capital letter (I've never seen user defined objects that go against this)
-    if node[0].strVal[0].isUpperAscii:
+    let
+      left = node[0]  # Left operand of dot expr
+      right = node[1] # Right operand of dot expr
+    if left.strVal[0].isUpperAscii:
       # Check the table they are accessing is allowed
-      var found = false
-      for table in scope:
-        if table.eqIdent(node[0]):
-          found = true
-      if not found:
-        fmt"{node[0]} is not currently accessible".error(node[0])
+      if not scope.anyIt(it.eqIdent(left)):
+        fmt"{node[0]} is not currently accessible".error(left)
       # If found then add expression to access expression.
       # We don't need to check if property exists since that will be checked next
-      let table = node[0]
-      return checkSymbols(node[1], table, scope, params)
+      return checkSymbols(right, left, scope, params)
     else:
       # Assume its a function call
       result[0] = checkSymbols(node[0], currentTable, scope, params)
@@ -347,31 +358,32 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       # If its a variable that see if we can match it to an existing variable.
       # This stops us creating multiple variables of the same type.
       # We don't do this for anything else (e.g. calls) since they might have side effects
-      var pos = params.len
+      let paramsIdx = queryParameters.len - 1 # No BackwardsIndex implemented =(
+      var
+        pos = params.len
+        found = false
       if param.kind == nnkIdent:
-        var found = false
-        for i, existing in params:
-          if existing.kind == nnkIdent and existing.eqIdent(param):
-            pos = i
-            found = true
-            break
-        if not found:
+        var foundIdx = params.findIt(it.kind == nnkIdent and it.eqIdent(param))
+        if foundIdx != -1:
+          found = true
+          pos = foundIdx
+        else:
           params &= param
       else:
         params &= param
 
       # Insert a call in its place which sets the type and places a parameter that can
       # be binded to later
-      result = newCall(bindSym"sqlParam", newCall("typeof", param), newLit(pos + 1))
+      result = newCall(bindSym"addParam", param, newLit(paramsIdx), newLit(pos + 1), newLit found)
     else:
       checkAfter(0)
   else:
     checkAfter(0)
 
 func whereImpl*[T](table: typedesc[T], query: static[QueryPart[bool]],
-                   args: seq[DbValue]): TableQuery[T] =
+                   params: int): TableQuery[T] =
   ## This is the internal proc that forces the query to be compiled
-  TableQuery[table](whereExpr: query.string, params: args)
+  TableQuery[table](whereExpr: query.string, params: params)
 
 macro where*(table: typedesc, query: untyped): TableQuery =
   ## Use this macro for genearting queries.
@@ -384,7 +396,7 @@ macro where*(table: typedesc, query: untyped): TableQuery =
         id {.primary, autoIncrement.}: int
         name: string
         price: float # I know float is bad for price, this is an example
-        
+
     let name = "Chair"
     discard ShopItem.where(
       # Normal Nim code gets put in here which gets converted into SQL.
@@ -394,18 +406,21 @@ macro where*(table: typedesc, query: untyped): TableQuery =
     # Gets compiled into
     # ShopItem.id == 9 AND LENGTH(ShopItem.name) > 9 OR ShopItem.price == 0.0 OR ShopItem.name == ?1
   #==#
-  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+  let
+    tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+    paramsIdx = queryParameters.len
+  # Initialise the parameters list for this query
+  queryParameters &= newStmtList()
   var params: seq[NimNode]
   let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
   # Boolean literals aren't allowed to be the entire query
   # Realised this would compile, but fail at runtime when trying to do Type.where(true)
+  # TODO: Just convert this into a proper boolean statement
   if query.kind == nnkIdent and query.eqIdent(["true", "false"]):
     "Query cannot be a single boolean value".error(query)
   # Add dbValue calls to convert the params
-  var dbParams = nnkBracket.newTree()
-  for param in params:
-    dbParams &= newCall("dbValue", param)
-  result = newCall(bindSym"whereImpl", table, queryNodes, dbParams.prefix("@"))
+  result = newCall(bindSym"whereImpl", table, queryNodes, newLit paramsIdx)
+  echo result.toStrLit
 
 template where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
@@ -439,26 +454,10 @@ when not defined(docs):
   # Error when using on non seq types, makes the type mismatch be clearer
   proc orderBy*[T: not seq](table: TableQuery[T], order: varargs[ColumnOrder]): TableQuery[T] {.error: "orderBy only works on seq[T]".}
 
-proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): TableQuery[T] =
-  ## Call after [where] to change how SQL sorts your data.
-  ##
-  ## Sorting will be a list of [asc], [desc], [nullsFirst], or [nullsLast] calls to order different columns.
-  ## These sortings run in order e.g. If the first column getting sorted is equal, then the next column will be used to compare
-  runnableExamples:
-    import ponairi/pragmas
-    type
-      Citizen {.table.} = object
-        name: string
-        age: int
-    # Get everyone older than 5 and first sort names alphabetically (From A to Z) and show the oldest
-    # person first if two people have the same name
-    static:
-      discard seq[Citizen].where(age > 5).orderBy(asc name, desc age)
-  #==#
-  # Build query manually so that the line info stays correct
-  let obj = T.tableName()
-  result = table
-  # Check the ordering is valid
+proc checkFieldOrdering(x: typedesc, sortings: openArray[ColumnOrder]) {.compileTime.} =
+  ## Performs checks on sortings to ensure that the orderings given make sense
+  ## e.g. Not calling NullsFirst on a non nullable field. not sorting something that doesn't exist
+  let obj = x.tableName()
   for order in sortings:
     echo obj.hasProperty(order.column)
     if not obj.hasProperty(order.column):
@@ -471,47 +470,58 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: varargs[ColumnOrder]): Tab
       if not typ.isOptional:
         fmt"{order.column} is not nullable".error(order.line)
 
+proc orderBy*[T: seq](table: TableQuery[T], sortings: static[varargs[ColumnOrder]]): TableQuery[T] =
+  ## Call after [where] to change how SQL sorts your data.
+  ##
+  ## Sorting will be a list of [asc], [desc], [nullsFirst], or [nullsLast] calls to order different columns.
+  ## These sortings run in order e.g. If the first column getting sorted is equal, then the next column will be used to compare
+  runnableExamples:
+    import ponairi/pragmas
+    type
+      Citizen {.table.} = object
+        name: string
+        age: int
+    # Get everyone older than 5 and first sort names alphabetically (From A to Z) and show the oldest
+    # person first if two people have the same name
+    discard seq[Citizen].where(age > 5).orderBy(asc name, desc age)
+  #==#
+  static:
+    checkFieldOrdering(T, sortings)
+  # Build query manually so that the line info stays correct
+  result = table
+  # Check the ordering is valid
+  for order in sortings:
     result.order &= order
 
 #
 # Overloads to use TableQuery
 #
 
-proc findImpl[T](db; q: TableQuery[T], order: static seq[ColumnOrder]): T =
+macro getParams(paramsIdx: static[int]): untyped =
+  # TODO: Convert to array when I get #17 merged
+  result = nnkBracket.newTree()
+  for param in queryParameters[paramsIdx]:
+    result &= newCall("dbValue", param)
+
+proc find*[T](db; q: static[TableQuery[T]]): T =
   const
     table = T.tableName
-    orderBy = order.build()
-  # static:
-    # Check that the ordering is valid
-    # for o in order:
-      # echo o
-  let query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr} {orderBy}"
-  echo query.string
-  db.find(T, query, q.params)
-
-macro find*[T](db; q: TableQuery[T], order: varargs[ColumnOrder]): T =
-  ## Finds any row/rows that match the query
-  # Convert the order into QueryPart
-  let orderCalls = nnkBracket.newTree()
-  for o in order:
-    orderCalls &= o
-  # result = genAst(findCall = bindSym"findImpl", db, q, orderCalls = orderCalls.prefix("@")):
-    # const calls = orderCalls
-    # findCall(db, q, calls)
-  result = newCall(bindSym"findImpl", db, q, orderCalls.prefix("@"))
+    orderBy = q.order.build()
+  const query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr} {orderBy}"
+  db.find(T, query, getParams(q.params))
 
 
-proc exists*[T](db; q: TableQuery[T]): bool =
+proc exists*[T](db; q: static[TableQuery[T]]): bool =
   ## Returns true if the query finds atleast one row
   const table = T.tableName
-  let query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
-  db.getValue[:int64](query, q.params).unsafeGet() == 1
+  const query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
+  db.getValue[:int64](query, getParams(q.params)).unsafeGet() == 1
 
-proc delete*[T](db; q: TableQuery[T]) =
+proc delete*[T](db; q: static[TableQuery[T]]) =
   ## Deletes any rows that match the query
   const table = T.tableName
-  let query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
-  db.exec(query, q.params)
+  const query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
+  db.exec(query, getParams(q.params))
 
 proc `$`*(x: TableQuery): string =
   ## Used for debugging a query, returns the generated SQL

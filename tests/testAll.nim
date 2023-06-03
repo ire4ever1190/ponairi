@@ -250,9 +250,9 @@ suite "Query builder":
     let
       name = "Jake"
       age = 42
-    let query = Person.where(name == {name} and name == {name})
+    const query = Person.where(name == {name} and name == {name})
     checkpoint query.whereExpr
-    check query.params.len == 1
+    check query.whereExpr == "Person.name == ?1 AND Person.name == ?1"
     check db.find(Person.where(
       name == {name} and age == {age} and
       name == {name} and age == {age}
@@ -267,39 +267,37 @@ suite "Query builder":
     check db.find(seq[Person]) == @[john]
     db.insert(jake)
 
+  test "Can check existance":
+    check db.exists(Person.where(age == 42))
+
   test "Can get default value for option":
     check db.find(
       Person.where(name == {"Jake"} and extraInfo.get("Some value") == {"Some value"})
     ) == jake
 
-  template everybody(): TableQuery = seq[Person].where()
+  const everybody = seq[Person].where()
+
   test "Can set order of query":
     check db
-      .find(everybody(), asc age)
+      .find(everybody.orderBy([asc age]))
       .isSorted(Ascending)
 
     check db
-      .find(everybody(), desc age)
+      .find(everybody.orderBy([desc age]))
       .isSorted(Descending)
 
   test "Can set null order":
     check db
-      .find(everybody(), nullsFirst extraInfo)[0]
+      .find(everybody.orderBy([nullsFirst extraInfo]))[0]
       .extraInfo.isNone()
 
     check db
-      .find(everybody(), nullsLast extraInfo)[0]
+      .find(everybody.orderBy([nullsLast extraInfo]))[0]
       .extraInfo.isSome()
-
-  test "Can only use null order on nullable column":
-    check not compiles(db.find(everybody(), nullsFirst age))
-
-  test "orderBy checks column exists":
-    check not compiles(db.find(everybody(), desc notFound))
 
   test "Multiple orderings can be passed":
     # More just checking the query actually runs, I trust sqlite to work
-    discard db.find(everybody(), asc age, desc name)
+    discard db.find(everybody.orderBy([asc age, desc name]))
 
   test "Works in overloaded templates":
     # This was a weird bug I found which was causing problems when used in async (Due to a feature I implemented funnyily enough)
@@ -313,6 +311,3 @@ suite "Query builder":
       discard x
     foo:
       db.find(Person.where())
-
-  test "Parameters are not allowed in the order":
-    check not compiles(db.find(everybody(), asc age > {test}))

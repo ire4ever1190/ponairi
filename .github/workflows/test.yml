@@ -31,7 +31,7 @@ jobs:
         path: ~/.nimble
         key: nimble-${{ hashFiles('*.nimble') }}
 
-    - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
+    - if: ${{ steps.cache-choosenim.outputs.cache-hit != 'true' }}
       name: Install nim dependencies
       continue-on-error: true
       run: nimble update && nimble install

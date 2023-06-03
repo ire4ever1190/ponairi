@@ -11,6 +11,17 @@ func seperateBy*[T](items: openArray[T], sep: string,
 
 template currentLine*(): LineInfo =
   ## Returns the current line as a LineInfo
-  block:
-    const pos = instantiationInfo(-2, fullPaths = true)
-    LineInfo(filename: pos.filename, line: pos.line, column: pos.column)
+  const (filename, line, column) = instantiationInfo(-2, fullPaths = true)
+  LineInfo(filename: filename, line: line, column: column)
+
+template findIt*(s, pred: untyped): int =
+  ## Like `find` except you can pass a custom checker
+  var result = 0
+  for it {.inject.} in s:
+    if pred:
+      break
+    inc result
+  # Retain semantics that -1 means it couldn't find it
+  if result == s.len:
+    result = -1
+  result
