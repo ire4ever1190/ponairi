@@ -2,7 +2,8 @@ import std/[
   unittest,
   options,
   strformat,
-  strutils
+  strutils,
+  times
 ]
 import ponairi {.all.}
 
@@ -21,6 +22,7 @@ type
   Dog* = ref object
     name {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
+    other: Option[DateTime]
 
   Something* = object
     name*, age*: string
