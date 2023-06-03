@@ -246,3 +246,30 @@ suite "Query builder":
       discard x
     foo:
       db.find(Person.where())
+
+  test "Works inside a proc":
+    # Was running into a environment misses issue.
+    # Issue was that I was building the parameters inside the find proc and so it couldn't access the outside scope.
+    # worked in some circumstances since it could access global variables
+    proc test() =
+      let name = jake.name
+      const query = Person.where(name == {name})
+      check db.find(query) == jake
+      check db.exists(query)
+      db.delete(query)
+      db.insert jake
+    test()
+
+  test "Has environment inside iterator":
+    proc test() =
+      for person in people:
+        check db.exists(Person.where(name == {person.name}))
+    test()
+
+  test "Works with lent[T]":
+    proc test() =
+      for person in @people:
+        const query = Person.where(name == {person.name})
+        check db.find(query) == person
+        check db.exists(query)
+    test()

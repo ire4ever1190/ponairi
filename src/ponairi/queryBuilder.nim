@@ -378,12 +378,12 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   else:
     checkAfter(0)
 
-func whereImpl*[T](table: typedesc[T], query: static[QueryPart[bool]],
-                   params: int): TableQuery[T] =
+func whereImpl[T](table: typedesc[T], query: static[QueryPart[bool]],
+                   paramsIdx: int): TableQuery[T] =
   ## This is the internal proc that forces the query to be compiled
-  TableQuery[table](whereExpr: query.string, params: params)
+  TableQuery[table](whereExpr: query.string, params: paramsIdx)
 
-macro where*(table: typedesc, query: untyped): TableQuery =
+macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   ## Use this macro for genearting queries.
   ## The query is a boolean expression made in Nim code
   runnableExamples:
@@ -419,7 +419,7 @@ macro where*(table: typedesc, query: untyped): TableQuery =
   # Add dbValue calls to convert the params
   result = newCall(bindSym"whereImpl", table, queryNodes, newLit paramsIdx)
 
-template where*[T](table: typedesc[T]): TableQuery[T] =
+func where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
   TableQuery[table](whereExpr: "1 == 1")
 
@@ -458,9 +458,8 @@ proc checkFieldOrdering(x: typedesc, sortings: openArray[ColumnOrder]) {.compile
   for order in sortings:
     if not obj.hasProperty(order.column):
       doesntExistErr(order.column, obj).error(order.line)
-
     # Check if type can actually be nullable
-    if order.order in {NullsFirst, NullsLast}:
+    elif order.order in {NullsFirst, NullsLast}:
       # We already checked the property exists, so we can safely get it
       let typ = obj.getType(order.column).get()
       if not typ.isOptional:
@@ -494,30 +493,61 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: static[varargs[ColumnOrder
 #
 
 macro getParams(paramsIdx: static[int]): untyped =
-  # TODO: Convert to array when I get #17 merged
   result = nnkBracket.newTree()
   for param in queryParameters[paramsIdx]:
     result &= newCall("dbValue", param)
 
-proc find*[T](db; q: static[TableQuery[T]]): T =
+macro hackyWorkaround(prc: untyped): untyped =
+  ## Implements my hacky workaround for buggy templates + missing environment
+  # There was a problem with missing environment since I was creating the parameters inside
+  # the proc and so it couldn't access the scope that the parameters were made in.
+  # Easy fix, wrap in a template.
+  # Except that was giving problems with a sequence becoming an array somehow.
+  # So I make a macro that is a glorified template
+  result = newStmtList()
+  let
+    name = prc.name
+    newName = name.strVal & "Impl"
+    dbIdent = ident"db"
+    queryIdent = ident"query"
+  prc.name = ident newName
+  let docs = prc.extractDocCommentsAndRunnables()
+  result &= prc
+  let wrapperMacro = quote do:
+    macro `name`*[T](`dbIdent`: DbConn, `queryIdent`: TableQuery[T]) =
+      `docs`
+      result = newCall(
+        bindSym `newName`,
+        `dbIdent`,
+        `queryIdent`,
+        newCall(bindSym"getParams", newDotExpr(`queryIdent`, ident"params"))
+      )
+  wrapperMacro.params[0] = prc.params[0]
+
+  result &= wrapperMacro
+
+
+
+proc find[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): T {.inline, hackyWorkaround.} =
   const
     table = T.tableName
     orderBy = q.order.build()
-  const query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr} {orderBy}"
-  db.find(T, query, getParams(q.params))
+    query = sql fmt"SELECT * FROM {table} WHERE {q.whereExpr} {orderBy}"
+  db.find(T, query, params)
 
 
-proc exists*[T](db; q: static[TableQuery[T]]): bool =
+proc exists[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): bool {.inline, hackyWorkaround.} =
   ## Returns true if the query finds atleast one row
-  const table = T.tableName
-  const query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
-  db.getValue[:int64](query, getParams(q.params)).unsafeGet() == 1
+  const
+    table = T.tableName
+    query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
+  db.getValue[:int64](query, params).unsafeGet() == 1
 
-proc delete*[T](db; q: static[TableQuery[T]]) =
+proc delete[T](db; q: static[TableQuery[T]], params: openArray[DbValue]) {.inline, hackyWorkaround.} =
   ## Deletes any rows that match the query
   const table = T.tableName
   const query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
-  db.exec(query, getParams(q.params))
+  db.exec(query, params)
 
 proc `$`*(x: TableQuery): string =
   ## Used for debugging a query, returns the generated SQL
