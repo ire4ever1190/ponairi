@@ -3,7 +3,9 @@ import std/[
   options,
   times,
   strformat,
-  algorithm
+  algorithm,
+  strutils,
+  times
 ]
 import data
 import ponairi

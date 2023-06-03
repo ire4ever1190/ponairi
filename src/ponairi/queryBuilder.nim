@@ -418,7 +418,6 @@ macro where*(table: typedesc, query: untyped): TableQuery =
     "Query cannot be a single boolean value".error(query)
   # Add dbValue calls to convert the params
   result = newCall(bindSym"whereImpl", table, queryNodes, newLit paramsIdx)
-  echo result.toStrLit
 
 template where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
@@ -457,7 +456,6 @@ proc checkFieldOrdering(x: typedesc, sortings: openArray[ColumnOrder]) {.compile
   ## e.g. Not calling NullsFirst on a non nullable field. not sorting something that doesn't exist
   let obj = x.tableName()
   for order in sortings:
-    echo obj.hasProperty(order.column)
     if not obj.hasProperty(order.column):
       doesntExistErr(order.column, obj).error(order.line)
 

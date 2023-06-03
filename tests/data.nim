@@ -3,7 +3,8 @@
 import ../src/ponairi
 import std/[
   options,
-  strformat
+  strformat,
+  times
 ]
 
 when (NimMajor, NimMinor) < (1, 7):
@@ -24,6 +25,7 @@ type
   Dog* {.table.} = ref object
     name* {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
+    other: Option[DateTime]
 
   Something* {.table.} = object
     name*, age*: string
