@@ -97,27 +97,20 @@ runnableExamples:
   db.insert Item(name: "Chair", price: 5.0)
   # We pass the ordering to orderBy, multiple orderings can be passed
   # i.e. sort by first parameter, then by second if any are equal, ..., etc
-  assert db.find(seq[Item].where().orderBy(asc name)).isSorted()
+  assert db.find(seq[Item].where().orderBy([asc name])).isSorted()
 
 type
-  SortOrder* = enum
-    ## How should SQLite sort the column
-    Ascending
-    Descending
-    NullsFirst
-    NullsLast
-
   ColumnOrder = object
     ## Info about an ordering
+    # Column is a string so that it can suport extensions (LIKE FTS5).
+    # It is formatted with the column name later (Use $# as the place holder)
     column*: string
-    order*: SortOrder
+    order*: string
     line: LineInfo # Store line info so error messages are better later
 
   TableQuery*[T] = object
     ## This is a full query. Stores the type of the table it is accessing
     ## and the SQL that will be executed
-    # This is a constant that I probably could've stored in the type signature.
-    # But that made life very difficult
     whereExpr*: string
     params*: int # Index into queryParameters
     order*: seq[ColumnOrder]
@@ -142,22 +135,27 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
 
-template makeOrder(name: untyped, ord: SortOrder, docs: untyped) =
+template makeOrder(name: untyped, ord: string, docs: untyped) =
   template name*(col: untyped): ColumnOrder =
     docs
     ColumnOrder(column: astToStr(col), order: ord, line: currentLine())
 
-makeOrder(asc, Ascending):
+makeOrder(asc, "$# ASC"):
   ## Make a column be in ascending order
 
-makeOrder(desc, Descending):
+makeOrder(desc, "$# DESC"):
   ## Make a column be in descending order
 
-makeOrder(nullsFirst, NullsFirst):
+const
+  # Store so we can check later
+  nullsFirstStr = "$# NULLS FIRST"
+  nullsLastStr = "$# NULLS LAST"
+
+makeOrder(nullsFirst, nullsFirstStr):
   ## Makes `nil` values get returned first.
   ## Column must be optional
 
-makeOrder(nullsLast, NullsLast):
+makeOrder(nullsLast, nullsLastStr):
   ## Makes `nil` values get returned last
   ## Column must be optional
 
@@ -165,17 +163,9 @@ func build(order: openArray[ColumnOrder]): string =
   ## Returns the ORDER BY clause. You probably won't need to use this
   ## But will be useful if you want to create your own functions
   if order.len > 0:
-    # We can't set the string directly on the enum
-    # since that would mess up the parseEnum call
-    const toStr: array[SortOrder, string] = [
-      "ASC",
-      "DESC",
-      "NULLS FIRST",
-      "NULLS LAST"
-    ]
     result = "ORDER BY "
     result.add order.seperateBy(", ") do (x: auto) -> string:
-       x.column & " " & toStr[x.order]
+      x.order % [x.column]
 #
 # Functions that build the query
 #
@@ -459,7 +449,7 @@ proc checkFieldOrdering(x: typedesc, sortings: openArray[ColumnOrder]) {.compile
     if not obj.hasProperty(order.column):
       doesntExistErr(order.column, obj).error(order.line)
     # Check if type can actually be nullable
-    elif order.order in {NullsFirst, NullsLast}:
+    elif order.order in [nullsFirstStr, nullsLastStr]:
       # We already checked the property exists, so we can safely get it
       let typ = obj.getType(order.column).get()
       if not typ.isOptional:
@@ -478,7 +468,7 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: static[varargs[ColumnOrder
         age: int
     # Get everyone older than 5 and first sort names alphabetically (From A to Z) and show the oldest
     # person first if two people have the same name
-    discard seq[Citizen].where(age > 5).orderBy(asc name, desc age)
+    discard seq[Citizen].where(age > 5).orderBy([asc name, desc age])
   #==#
   static:
     checkFieldOrdering(T, sortings)
@@ -511,8 +501,9 @@ macro hackyWorkaround(prc: untyped): untyped =
     dbIdent = ident"db"
     queryIdent = ident"query"
   prc.name = ident newName
-  let docs = prc.extractDocCommentsAndRunnables()
+  let docs = prc.body.extractDocCommentsAndRunnables()
   result &= prc
+  # Create the glorified template
   let wrapperMacro = quote do:
     macro `name`*[T](`dbIdent`: DbConn, `queryIdent`: TableQuery[T]) =
       `docs`
@@ -522,13 +513,14 @@ macro hackyWorkaround(prc: untyped): untyped =
         `queryIdent`,
         newCall(bindSym"getParams", newDotExpr(`queryIdent`, ident"params"))
       )
+  # Make return types line up
   wrapperMacro.params[0] = prc.params[0]
-
   result &= wrapperMacro
 
 
 
 proc find[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): T {.inline, hackyWorkaround.} =
+  ## Returns all rows that match
   const
     table = T.tableName
     orderBy = q.order.build()
