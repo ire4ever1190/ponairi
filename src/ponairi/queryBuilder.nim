@@ -267,7 +267,7 @@ func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
   initQueryPartNode(ident $T, val)
 
 
-macro addParam[T](param: T, paramsIdx, idx: static[int], found: static[bool]): QueryPart[T] =
+macro addParam(param: untyped, paramsIdx, idx: static[int], found: static[bool]) =
   ## Internal proc that saves the param info into a query.
   ## This is done so we get the actual symbol and dont run into mismatches later on.
   ## It then returns what the type of the param is so teh rest of the system stays typesafe
@@ -537,8 +537,9 @@ proc exists[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): bool {
 
 proc delete[T](db; q: static[TableQuery[T]], params: openArray[DbValue]) {.inline, hackyWorkaround.} =
   ## Deletes any rows that match the query
-  const table = T.tableName
-  const query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
+  const
+    table = T.tableName
+    query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
   db.exec(query, params)
 
 proc `$`*(x: TableQuery): string =

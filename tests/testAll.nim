@@ -273,3 +273,8 @@ suite "Query builder":
         check db.find(query) == person
         check db.exists(query)
     test()
+
+  test "Works with proc parameters":
+    proc test(db: DbConn, name: string) =
+      check db.exists(Person.where(name == {name}))
+    db.test(jake.name)
