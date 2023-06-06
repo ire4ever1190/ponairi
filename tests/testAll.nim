@@ -227,6 +227,6 @@ suite "Index":
 
     discard db.insertID u
     expect DbError:
-      discard db.insertID Unrepeatable(value: 1)
+      discard db.insertID u
 
 close db
