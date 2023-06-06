@@ -110,8 +110,7 @@ test "Upsert can ignore fields":
   var person = jake
   person.age = int.high
   db.upsert(person, age)
-  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?",
-      person.age).isNone()
+  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
 
 test "Upsert a sequence":
   db.upsert(jakesDogs)
@@ -120,8 +119,7 @@ test "Upsert check fields exist":
   check not compiles(db.upsert(jake, test))
 
 test "Finding to tuples":
-  let pairs = db.find(seq[tuple[owner: string, dog: string]],
-      sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
   for row in pairs:
     check row.owner == "Jake"
     check row.dog != ""
