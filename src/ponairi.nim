@@ -317,7 +317,8 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   result.join ");"
   # Add in the indexes
   for index, (unique, columns) in indexes:
-    result.join fmt"""CREATE INDEX IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
+    let indexType = (if unique: "UNIQUE" else: "") & " INDEX"
+    result.join fmt"""CREATE {indexType} IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
   result = sqlLit(result)
 
 macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =

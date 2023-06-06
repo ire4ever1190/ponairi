@@ -35,6 +35,10 @@ type
     info {.index: "extra_idx".}: string
     extra {.uniqueIndex.}: string
 
+  Unrepeatable = object
+    id {.primary, autoIncrement.}: int
+    value {.uniqueIndex.}: int
+
 func `$`(d: Dog): string =
   if d != nil:
     fmt"{d.name} -> {d.owner}"
@@ -216,5 +220,13 @@ suite "Index":
 
   test "Unique index can be used":
     check "SELECT * FROM Model WHERE extra = 'foo'".usesIndex("Model_index_unique_extra")
+
+  test "Unique constraint is applied on unique index":
+    db.create Unrepeatable
+    let u = Unrepeatable(value: 1)
+
+    discard db.insertID u
+    expect DbError:
+      discard db.insertID u
 
 close db
