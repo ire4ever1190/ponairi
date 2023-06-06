@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.3.1"
+version       = "0.3.2"
 author        = "Jake Leahy"
 description   = "Simple ORM for sqlite"
 license       = "MIT"
