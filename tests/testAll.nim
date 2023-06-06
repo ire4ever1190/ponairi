@@ -35,6 +35,10 @@ type
     info {.index: "extra_idx".}: string
     extra {.uniqueIndex.}: string
 
+  Unrepeatable = object
+    id {.primary, autoIncrement.}: int
+    value {.uniqueIndex.}: int
+
 func `$`(d: Dog): string =
   if d != nil:
     fmt"{d.name} -> {d.owner}"
@@ -106,7 +110,8 @@ test "Upsert can ignore fields":
   var person = jake
   person.age = int.high
   db.upsert(person, age)
-  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?", person.age).isNone()
+  check db.find(Option[Person], sql"SELECT * FROM Person WHERE age = ?",
+      person.age).isNone()
 
 test "Upsert a sequence":
   db.upsert(jakesDogs)
@@ -115,7 +120,8 @@ test "Upsert check fields exist":
   check not compiles(db.upsert(jake, test))
 
 test "Finding to tuples":
-  let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
+  let pairs = db.find(seq[tuple[owner: string, dog: string]],
+      sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
   for row in pairs:
     check row.owner == "Jake"
     check row.dog != ""
@@ -216,5 +222,13 @@ suite "Index":
 
   test "Unique index can be used":
     check "SELECT * FROM Model WHERE extra = 'foo'".usesIndex("Model_index_unique_extra")
+
+  test "Unique constraint is applied on unique index":
+    db.create Unrepeatable
+    let u = Unrepeatable(value: 1)
+
+    discard db.insertID u
+    expect DbError:
+      discard db.insertID Unrepeatable(value: 1)
 
 close db
