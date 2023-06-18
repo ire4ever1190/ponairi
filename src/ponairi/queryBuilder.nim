@@ -101,9 +101,9 @@ runnableExamples:
 
 type
   ColumnOrder = object
-    ## Info about an ordering
-    # Column is a string so that it can suport extensions (LIKE FTS5).
-    # It is formatted with the column name later (Use $# as the place holder)
+    ## Info about an ordering.
+    ## Column is a string so that it can suport extensions (LIKE FTS5).
+    ## It is formatted with the column name later (Use $# as the place holder).
     column*: string
     order*: string
     line: LineInfo # Store line info so error messages are better later
@@ -112,12 +112,19 @@ type
     ## This is a full query. Stores the type of the table it is accessing
     ## and the SQL that will be executed
     whereExpr*: string
-    params*: seq[string] # Passing
+    paramsIdx*: int # see `queryParameters` CacheSeq. This is the index into that
     order*: seq[ColumnOrder]
 
   QueryPart*[T] = distinct string
     ## This is a component of a query, stores the type that the SQL would return
     ## and also the SQL that it is
+
+const queryParameters = CacheSeq"ponairi.parameters"
+  ## We need to store the NimNode of parameters (Not the actual value)
+  ## so that we can reconstruct the parameters.
+  ## Each query is given an index which corresponds to the parameters for it
+  ## Yes this is a hacky method
+  ## but it was the best I could come up with.
 
 func tableName[T](x: typedesc[T]): string =
   result = $T
@@ -128,10 +135,18 @@ func tableName[T](x: typedesc[seq[T]]): string =
 func tableName[T](x: typedesc[Option[T]]): string =
   result = $T
 
-template makeOrder(name: untyped, ord: string, docs: untyped) =
+template makeOrder*(name: untyped, format: string, docs: untyped) =
+  ## Allows you to create your own ordering. Use this to support other libraries.
+  ##
+  ## - `format`: supports a single optional `$#` which specifies where to place the column name
+  runnableExamples:
+    # FTS5 has a `rank` ordering which can be supported like so
+    makeOrder(rank, "rank")
+    # We can now use `rank` in an orderBy call
+  #==#
   template name*(col: untyped): ColumnOrder =
     docs
-    ColumnOrder(column: astToStr(col), order: ord, line: currentLine())
+    ColumnOrder(column: astToStr(col), order: format, line: currentLine())
 
 makeOrder(asc, "$# ASC"):
   ## Make a column be in ascending order
@@ -193,7 +208,6 @@ macro importSQL*(format: static[string], prc: untyped) =
   # Wrap all the types in QueryPart
   for param in params:
     if param.kind != nnkIdentDefs: continue
-    echo param.treeRepr
     param[^2] = wrapPart(param[^2])
     # Add each parameter into the parts so the formatter can access them
     for prop in param[0 ..< ^2]:
@@ -222,6 +236,16 @@ defineInfixOp(`<=`, SomeNumber, bool)
 defineInfixOp(`==`, SomeNumber, bool)
 defineInfixOp(`==`, bool, bool)
 defineInfixOp(`==`, string, bool)
+
+template defineMathOp(op, restriction: untyped) =
+  ## Creates a math operation that will have the inputs return the same type.
+  # Should probably manually define the math types to better reflect how they can be used
+  func `op`*[T: restriction](a, b: T): T {.importSQL: "$# " & opToStr(op) & " $#".}
+
+defineMathOp(`+`, SomeNumber)
+defineMathOp(`*`, SomeNumber)
+defineMathOp(`-`, SomeNumber)
+defineMathOp(`/`, SomeFloat)
 
 defineInfixOp(`and`, bool, bool)
 defineInfixOp(`or`, bool, bool)
@@ -278,15 +302,17 @@ func len*(str: string): int {.importSQL: "LENGTH($#)".} =
 using db: DbConn
 using args: varargs[DbValue, dbValue]
 
-func initQueryPartNode(x: NimNode, val: string): NimNode =
+func initQueryPartNode(x: NimNode, val: NimNode): NimNode =
   ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
-  let typ = x
-  nnkCall.newTree(
-    nnkBracketExpr.newTree(ident"QueryPart", typ),
-    newLit val
+  let strVal = newLit(if x.eqIdent("string"): fmt"'{val.strVal}'" else: $val.toStrLit())
+  strVal.copyLineInfo(val)
+  result = nnkCall.newTree(
+    nnkBracketExpr.newTree(ident"QueryPart", x),
+    strVal
   )
+  result.copyLineInfo(val)
 
-func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
+func initQueryPartNode[T](x: typedesc[T], val: NimNode): NimNode =
   initQueryPartNode(ident $T, val)
 
 #[
@@ -297,7 +323,7 @@ func initQueryPartNode[T](x: typedesc[T], val: string = $T): NimNode =
 ]#
 
 proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
-                  params: var seq[string]): NimNode =
+                  paramsIdx: int): NimNode =
   ## Converts atoms like literals (e.g. integer, string, bool literals) and symbols (e.g. properties in an object, columns in current scope)
   ## into [QueryPart] variables. This then allows us to leave the rest of the query parsing to the Nim compiler which means I don't need to
   ## reinvent the wheel with type checking.
@@ -305,25 +331,27 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
   template checkAfter(start: int) =
     ## Checks the rest of the nodes starting with `start`
     for i in start..<node.len:
-      result[i] = result[i].checkSymbols(currentTable, scope, params)
+      result[i] = result[i].checkSymbols(currentTable, scope, paramsIdx)
 
   result = node
   case node.kind
   of nnkIdent, nnkSym:
     if node.eqIdent(["true", "false"]):
       # We technically could use TRUE and FALSE
-      return initQueryPartNode(bool, $int(node.boolVal))
+      return initQueryPartNode(bool, node)
     else:
       let typ = currentTable.getType(node)
       if typ.isNone:
         doesntExistErr($node, $currentTable).error(node)
-      return initQueryPartNode(typ.unsafeGet, fmt"{currentTable.strVal}.{node.strVal}")
+      let access = newLit fmt"{currentTable.strVal}.{node.strVal}"
+      access.copyLineInfo(node)
+      return initQueryPartNode(typ.unsafeGet, access)
   of nnkStrLit:
-    return initQueryPartNode(string, fmt"'{node.strVal}'")
+    return initQueryPartNode(string, node)
   of nnkIntLit:
-    return initQueryPartNode(int, $node.intVal)
+    return initQueryPartNode(int, node)
   of nnkFloatLit:
-    return initQueryPartNode(float, $node.floatVal)
+    return initQueryPartNode(float, node)
   of nnkDotExpr:
     # Bit of a hacky check, but only assume table access when the thing they are accessing
     # starts with capital letter (I've never seen user defined objects that go against this)
@@ -336,11 +364,39 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
         fmt"{node[0]} is not currently accessible".error(left)
       # If found then add expression to access expression.
       # We don't need to check if property exists since that will be checked next
-      return checkSymbols(right, left, scope, params)
+      return checkSymbols(right, left, scope, paramsIdx)
     else:
       # Assume its a function call
-      result[0] = checkSymbols(node[0], currentTable, scope, params)
-  of nnkInfix, nnkCall:
+      result[0] = checkSymbols(node[0], currentTable, scope, paramsIdx)
+  of nnkCurly:
+    if node.len == 1:
+      let
+        param = node[0]
+        params = queryParameters[^1]
+      var
+        pos = params.len
+        found = false
+
+      # If its a variable that see if we can match it to an existing variable.
+      # This allows us to reuse values in the query.
+      # We don't do this for anything else (e.g. calls) since they might have side effects
+      if param.kind in identNodes:
+        var foundIdx = params.findIt(it.kind == nnkIdent and it.eqIdent(param))
+        if foundIdx != -1:
+          found = true
+          pos = foundIdx
+
+      if not found:
+        queryParameters[^1] &= param
+
+      # Insert a QueryPart[T] so the query knows the type of the parameter
+      # TODO: Insert the type so that we can ensure the same type is getting passed later
+      let posVal = newLit "?" & $(pos + 1) # SQLite parameters are 1 indexed
+      result = quote do:
+        QueryPart[typeof(`param`)](`posVal`)
+    else:
+      checkAfter(0)
+  of nnkInfix, nnkCall, nnkPrefix:
     var
       scope = scope
       currentTable = currentTable
@@ -360,36 +416,8 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       result[0] = function
       result.insert(1, firstParam)
     checkAfter(1)
-  of nnkPrefix:
-    if node[0].eqIdent("?"):
-      let param = node[1]
-
-      var
-        pos = params.len
-        typ: NimNode
-
-      case param.kind
-      of nnkIdent, nnkSym:
-        # Render to a string to better handle complex types like Option[T]
-        typ = param.toStrLit()
-      of nnkBracket:
-        # TODO: Check parameters
-        pos = param[0].intVal
-        typ = param[1]
-      else:
-        # TODO: Handle invalid parameter
-        "nope".error(node)
-      # TODO: Bind to a template or something that checks the typ is a typedesc
-      result = initQueryPartNode(typ, "?" & $pos)
-    else:
-      checkAfter(1)
   else:
     checkAfter(0)
-
-func whereImpl[T](table: typedesc[T], query: static[QueryPart[bool]],
-                   params: openArray[string]): TableQuery[T] =
-  ## This is the internal proc that forces the query to be compiled
-  TableQuery[T](whereExpr: query.string, params: @params)
 
 macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
   ## Use this macro for genearting queries.
@@ -412,20 +440,28 @@ macro where*[T](table: typedesc[T], query: untyped): TableQuery[T] =
     # Gets compiled into
     # ShopItem.id == 9 AND LENGTH(ShopItem.name) > 9 OR ShopItem.price == 0.0 OR ShopItem.name == ?1
   #==#
-  let tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+  let
+    tableObject = if table.kind == nnkBracketExpr: table[1] else: table
+    paramsIdx = queryParameters.len
   # Initialise the parameters list for this query
-  var params = @["k"]
-  let queryNodes = checkSymbols(query, tableObject, @[tableObject], params)
+  queryParameters &= newStmtList()
+  # We wrap in a StmtList so the `quote do` doesn't screw with line info
+  let queryNodes = newStmtList(checkSymbols(query, tableObject, @[tableObject], paramsIdx))
   # Boolean literals aren't allowed to be the entire query
   # Realised this would compile, but fail at runtime when trying to do Type.where(true)
   # TODO: Just convert this into a proper boolean statement
   if query.kind == nnkIdent and query.eqIdent(["true", "false"]):
     "Query cannot be a single boolean value".error(query)
   # Add dbValue calls to convert the params
-  let queryLine = query.lineInfoObj
-  result = quote do:
-    TableQuery[`table`](whereExpr: `query`.string, params: @[""])
-  echo result.treeRepr
+  let invalidReturn = makeError("Query should return 'bool'", query.lineInfoObj)
+  result = newStmtList()
+  result.add quote do:
+    # Allow templates to access the parameters index
+    const paramsIdx = `paramsIdx`
+    const query = `queryNodes`
+    when query.T isnot bool:
+      `invalidReturn`
+    TableQuery[`table`](whereExpr: `queryNodes`.string, paramsIdx: paramsIdx)
 
 func where*[T](table: typedesc[T]): TableQuery[T] =
   ## Create a where statement that matches anything
@@ -506,8 +542,42 @@ proc orderBy*[T: seq](table: TableQuery[T], sortings: static[varargs[ColumnOrder
 #   for (typ, param) in zip(typs, params):
 #     discard
 
-template find*[T](db; q: static[TableQuery[T]], params: varargs[untyped]): T =
-  ## Returns all rows that match
+macro getParams(paramsIdx: static[int]): untyped =
+  result = nnkBracket.newTree()
+  for param in queryParameters[paramsIdx]:
+    result &= newCall("dbValue", param)
+
+macro hackyWorkaround(prc: untyped): untyped =
+  ## Implements my hacky workaround for buggy templates + missing environment
+  # There was a problem with missing environment since I was creating the parameters inside
+  # the proc and so it couldn't access the scope that the parameters were made in.
+  # Easy fix, wrap in a template.
+  # Except that was giving problems with a sequence becoming an array somehow.
+  # So I make a macro that is a glorified template
+  result = newStmtList()
+  let
+    name = prc.name
+    newName = name.strVal & "Impl"
+    dbIdent = ident"db"
+    queryIdent = ident"query"
+  prc.name = ident newName
+  let docs = prc.extractDocCommentsAndRunnables()
+  result &= prc
+  let wrapperMacro = quote do:
+    macro `name`*[T](`dbIdent`: DbConn, `queryIdent`: TableQuery[T]) =
+      `docs`
+      result = newCall(
+        bindSym `newName`,
+        `dbIdent`,
+        `queryIdent`,
+        newCall(bindSym"getParams", newDotExpr(`queryIdent`, ident"paramsIdx"))
+      )
+  wrapperMacro.params[0] = prc.params[0]
+
+  result &= wrapperMacro
+
+
+proc find[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): T {.inline, hackyWorkaround.} =
   const
     table = T.tableName
     orderBy = q.order.build()
@@ -515,18 +585,17 @@ template find*[T](db; q: static[TableQuery[T]], params: varargs[untyped]): T =
   db.find(T, query, params)
 
 
-template exists*[T](db; q: static[TableQuery[T]], params: varargs[untyped]): bool =
+proc exists[T](db; q: static[TableQuery[T]], params: openArray[DbValue]): bool {.inline, hackyWorkaround.} =
   ## Returns true if the query finds atleast one row
   const
     table = T.tableName
     query = sql fmt"SELECT EXISTS (SELECT 1 FROM {table} WHERE {q.whereExpr} LIMIT 1)"
   db.getValue[:int64](query, params).unsafeGet() == 1
 
-template delete*[T](db; q: static[TableQuery[T]], params: openArray[untyped]) =
+proc delete[T](db; q: static[TableQuery[T]], params: openArray[DbValue]) {.inline, hackyWorkaround.} =
   ## Deletes any rows that match the query
-  const
-    table = T.tableName
-    query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
+  const table = T.tableName
+  const query = sql fmt"DELETE FROM {table} WHERE {q.whereExpr}"
   db.exec(query, params)
 
 proc `$`*(x: TableQuery): string =

@@ -1,3 +1,4 @@
 testAll
 testMacros
 megatest*
+errorChecker

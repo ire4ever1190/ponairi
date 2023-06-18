@@ -1,17 +1,14 @@
-discard """
-cmd: "nim check $file"
-"""
-
 import ../data
 
 var db: DbConn
 
 
+discard db.find(Person.where(1 + 1)) #[Error
+                               ^ Query should return 'bool']#
 
-Person.where(name == 9) #[tt.Error
+Person.where(name == 9) #[Error
                   ^ type mismatch]#
 
-let num = 9
-db.find(Person.where(name == {num})) #[tt.Error
-                          ^ type mismatch]#
+
+
 

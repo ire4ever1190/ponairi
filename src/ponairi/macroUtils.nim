@@ -17,9 +17,9 @@ type
     # I don't think a person will have too many pragmas so a seq should be fine for now
     pragmas*: seq[Pragma]
 
-const identNodes = {nnkIdent, nnkSym}
+const identNodes* = {nnkIdent, nnkSym}
 
-func isIdent(x: NimNode): bool =
+func isIdent*(x: NimNode): bool =
   ## Returns if the node is an ident type (See identNodes)
   x.kind in identNodes
 
@@ -196,4 +196,21 @@ func newLit*[T](x: openArray[T]): NimNode =
   var items = nnkBracket.newTree()
   for item in x:
     items &= newLit item
-  result = items.prefix("@")
+  result = items.prefix("@") # TODO: Maybe just return an array?
+
+func makeError*(msg: string, line: LineInfo): NimNode =
+  ## Makes an error pragma with line info correctly set.
+  result = nnkPragma.newTree(
+    nnkExprColonExpr.newTree(
+      ident"error",
+      newLit msg
+    )
+  )
+  result.setLineInfo(line)
+
+const testSeq = CacheSeq"test"
+
+when not compiles(testSeq[^1]):
+  # Stolen from my Nim PR =P
+  proc `[]`*(s: CacheSeq; i: BackwardsIndex): NimNode =
+    s[s.len - int(i)]

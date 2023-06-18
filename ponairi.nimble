@@ -21,4 +21,4 @@ task test, "Runs all tests":
   for file in ["All", "Macros"]:
     selfExec "r tests/test" & file
   # Run testament
-  exec "testament all"
+  exec "nim r tests/errorChecker tests/errors/t*.nim"

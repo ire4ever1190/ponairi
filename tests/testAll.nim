@@ -207,7 +207,7 @@ suite "Query builder":
 
   test "Can get default value for option":
     check db.find(
-      Person.where(name == {"Jake"} and extraInfo.get("Some value") == {"Some value"})
+      Person.where(name == "Jake" and extraInfo.get("Some value") == "Some value")
     ) == jake
 
   const everybody = seq[Person].where()
@@ -278,3 +278,6 @@ suite "Query builder":
     proc test(db: DbConn, name: string) =
       check db.exists(Person.where(name == {name}))
     db.test(jake.name)
+
+  test "Works with prefix calls":
+    discard db.exists(Person.where(not extraInfo.isSome()))
