@@ -277,3 +277,10 @@ suite "Query builder":
 
   test "Works with prefix calls":
     discard db.exists(Person.where(not extraInfo.isSome()))
+
+  # test "Calls can be composed":
+  #   var foo = 9 # TODO: Add place holder syntax like {foo: int} for when it doesn't exist in scope of declaration'
+  #   const peeps = Person.where(age == {foo})
+  #   proc test() =
+  #     foo = jake.age
+  #     check db.find(Person.where(name == {jake.age} and exists(peeps)))

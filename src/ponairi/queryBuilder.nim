@@ -304,7 +304,11 @@ using args: varargs[DbValue, dbValue]
 
 func initQueryPartNode(x: NimNode, val: NimNode): NimNode =
   ## Makes a QueryPart NimNode. This doesn't make an actual QueryPart
-  let strVal = newLit(if x.eqIdent("string"): fmt"'{val.strVal}'" else: $val.toStrLit())
+  let strVal = newLit(case val.kind
+    of nnkIntLit: $val.intVal
+    of nnkFloatLit: $val.floatVal
+    of nnkStrLit: val.strVal
+    else: "")
   strVal.copyLineInfo(val)
   result = nnkCall.newTree(
     nnkBracketExpr.newTree(ident"QueryPart", x),
@@ -347,7 +351,9 @@ proc checkSymbols(node: NimNode, currentTable: NimNode, scope: seq[NimNode],
       access.copyLineInfo(node)
       return initQueryPartNode(typ.unsafeGet, access)
   of nnkStrLit:
-    return initQueryPartNode(string, node)
+    let strNode = newLit fmt"'{node.strVal}'"
+    strNode.copyLineInfo(node)
+    return initQueryPartNode(string, strNode)
   of nnkIntLit:
     return initQueryPartNode(int, node)
   of nnkFloatLit:
