@@ -9,6 +9,8 @@
   I didn't know enough about testament to write a PR, and I think it might be intended behaviour
 ]##
 
+# TODO: Support warnings and hints
+
 import std/[
   os,
   strutils,
@@ -25,7 +27,7 @@ import std/[
 import ponairi/utils
 
 type
-  TestKind = enum # TODO: Support warnings and hints
+  TestKind = enum
     Error
 
   Test = object
@@ -104,15 +106,23 @@ proc handleFile(idx: int, process: Process) =
   ## Handles testing the output of a check. Puts the result in `results`
   var tests = files[idx].parseTests()
   for error in process.parseErrors:
-    # Try and find the error first by message. Then try line/file if we can't find it.
-    # This is done since sometimes the message might be there but be in the wrong file
-    var i = tests.findIt(it.message == error.message)
-    if i == -1:
-      i = tests.findIt(it.file == error.file and it.line == error.line)
-    # We found it, check it all lines up
-    if i != -1:
-      var res: TestResult
+    var best: (int, int) # Score + index into tests
+
+    for i in 0..<tests.len:
       let test = tests[i]
+      var score = 0
+      if test.message == error.message:
+        score += 1
+      if test.file.sameFile(error.file):
+        score += 1
+        if test.line == error.line:
+          score += 1
+      if score > best[0]:
+        best = (score, i)
+    # We found it, check it all lines up
+    if best[0] > 1: # Be a bit strict with the test
+      var res: TestResult
+      let test = tests[best[1]]
       if not test.file.sameFile(error.file):
         res = TestResult(result: FileWrong, loc: LineInfo(filename: error.file, line: error.line, column: error.column))
       elif test.line != error.line:
@@ -125,7 +135,7 @@ proc handleFile(idx: int, process: Process) =
         res = TestResult(result: Passed)
       res.test = test
       results[idx] &= res
-      tests.del(i) # Ignore the test after this
+      tests.del(best[1]) # Ignore the test after this
   # Any left over tests will fail since the error wasn't found
   results[idx].add collect do:
     for test in tests:
@@ -147,7 +157,7 @@ for i in 0..<results.len:
   stdout.styledWriteLine(fgBlue, file, resetStyle)
   for result in results[i]:
     let test = result.test
-    stdout.write("  " & result.test.message & ": ")
+    stdout.write("  " & result.test.message & fmt" ({test.line}, {test.column}): ")
     total += 1
     case result.result
     of Passed:

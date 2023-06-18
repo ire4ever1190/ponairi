@@ -12,3 +12,6 @@ Person.where(
   exists(Dog.where(owner == Person.owner)) #[Error
                                    ^ owner doesn't exist in Person]#
 )
+
+db.upsert(jake, test) #[Error
+                ^ test doesn't exist in Person]#

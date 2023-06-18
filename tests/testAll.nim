@@ -74,10 +74,6 @@ suite "Base API":
     check dog in db.find(seq[Dog])
     db.upsert(oldVal)
 
-  test "Upsert check fields exist":
-    # This isn't in testament tests since it kept getting the file wrong
-    check not compiles(db.upsert(jake, test))
-
   test "Finding to tuples":
     let pairs = db.find(seq[tuple[owner: string, dog: string]], sql"SELECT Person.name, Dog.name FROM Dog JOIN Person ON Person.name = Dog.owner ")
     for row in pairs:
