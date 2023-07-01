@@ -5,7 +5,9 @@ import std/[
   strformat,
   algorithm,
   strutils,
-  times
+  times,
+  macrocache,
+  macros
 ]
 import data
 import ponairi
@@ -159,7 +161,7 @@ suite "Query builder":
 
   test "Can access outer table in inner call":
     check db.find(seq[Person].where(
-      exists(Dog.where(owner == Person.name))
+      exists(Dog.where(owner == Person%name))
     )) == @[jake]
 
   test "Can perform nil checks":
@@ -278,9 +280,19 @@ suite "Query builder":
   test "Works with prefix calls":
     discard db.exists(Person.where(not extraInfo.isSome()))
 
-  # test "Calls can be composed":
-  #   var foo = 9 # TODO: Add place holder syntax like {foo: int} for when it doesn't exist in scope of declaration'
-  #   const peeps = Person.where(age == {foo})
-  #   proc test() =
-  #     foo = jake.age
-  #     check db.find(Person.where(name == {jake.age} and exists(peeps)))
+  test "Calls can be composed":
+    var foo = 9 # TODO: Add place holder syntax like {foo: int} for when it doesn't exist in scope of declaration'
+    const peeps = Person.where(age == {foo})
+    # Access the cache so we can check the parameters
+    const queryParameters = CacheSeq"ponairi.parameters"
+    proc test() =
+      foo = jake.age
+      const q = Person.where(name == {jake.name} and exists(peeps))
+      # Check query works
+      echo "Query: ", q
+      check db.exists(q)
+      # Check that the parameters from the inner query are copied
+      static:
+        echo queryParameters[q.paramsIdx].treeRepr
+        assert queryParameters[q.paramsIdx].len == 2
+    test()

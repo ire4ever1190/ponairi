@@ -1,6 +1,7 @@
 import std/[
   strformat,
-  macros
+  macros,
+  strutils
 ]
 
 func seperateBy*[T](items: openArray[T], sep: string,
@@ -32,3 +33,11 @@ template findIt*(s, pred: untyped): int =
 func doesntExistErr*(field, table: string): string =
   ## Returns formatted error for when a field doesn't exist
   fmt"{field} doesn't exist in {table}"
+
+func escapeQuoteSQL*(x: string): string =
+  ## Escapes quotes (') in a string so that SQLite will treat them as a character
+  runnableExamples:
+    assert "Hello 'world'".escapeQuoteSQL() == "Hello ''world''"
+  #==#
+  x.replace("'", "''")
+

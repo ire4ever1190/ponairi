@@ -120,6 +120,8 @@ func isPrimary*(prop: Property): bool =
   result = "primary" in prop.pragmas
 
 const properties = CacheTable"ponairi.properties"
+  ## List of properties for an object.
+  ## Is stored as a list of IdentDefs
 
 proc registerTable*(obj: NimNode) =
   ## Adds a tables properties to the properties cache table
@@ -140,6 +142,10 @@ proc registerTable*(obj: NimNode) =
   properties[if obj.isIdent: obj.strVal else: obj.getName()] = props
 
 using obj: NimNode | string
+
+proc getProperties*(key: string): seq[NimNode] =
+  for prop in properties[key]:
+    result &= prop
 
 proc getType*(obj; property: string | NimNode): Option[NimNode] =
   ## Returns the type for a property if it exists
