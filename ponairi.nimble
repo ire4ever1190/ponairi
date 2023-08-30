@@ -11,7 +11,7 @@ srcDir        = "src"
 # Dependencies
 
 requires "nim >= 1.6.0"
-requires "https://github.com/PhilippMDoerner/ndb.nim#59043f7"
+requires "lowdb >= 0.1.1"
 
 task checkDocs, "Runs documentation generator to make sure nothing is wrong":
   exec "nimble doc --errorMax:1 --warningAsError:BrokenLink:on --project --outdir:docs src/ponairi.nim"
