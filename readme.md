@@ -2,7 +2,7 @@
 
 Simple ORM to handle basic CRUD tasks. Future plans are to expand the query generation to make needing to write SQL less common
 
-[Docs here](https://tempdocs.netlify.app/ponairi/stable/ponairi.html)
+[Docs here](https://ire4ever1190.github.io/ponairi/ponairi.html)
 
 ### Create
 
