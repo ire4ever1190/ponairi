@@ -340,7 +340,7 @@ macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[string]): SqlQuery =
+macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: seq[string]): SqlQuery =
   ## Returns a string that can be used to insert or update an object into the database
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
@@ -350,7 +350,7 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[str
     updateStmts: seq[string]
     excludes: seq[string]
   # Check all the excluded properties exist
-  for prop in excludeProps:
+  for prop in excludeProps[0]:
     if not table.hasProperty(prop):
       fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
     excludes &= prop.strVal
@@ -392,7 +392,7 @@ proc insert*[T: SomeTable](db; items: openArray[T]) =
       db.insert item
 
 proc upsertImpl[T: SomeTable](db; item: T, exclude: static[openArray[string]] = []) =
-  const query = createUpsert(T, exclude)
+  const query = createUpsert(T, @exclude)
   var params: seq[DbValue]
   for name, field in item.fieldPairs:
     params &= dbValue(field)

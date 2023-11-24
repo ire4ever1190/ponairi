@@ -63,7 +63,11 @@ proc getName*(n: NimNode): string =
     assert false, "Name is invalid"
 
 proc getProperties*(impl: NimNode): seq[Property] =
-  for identDef in impl[2][2]:
+  var objectTy = impl[2]
+  # Need to remove the ref if its a ref type
+  if objectTy.kind == nnkRefTy:
+    objectTy = objectTy[0]
+  for identDef in objectTy[2]:
     for property in identDef[0 ..< ^2]:
       var newProp = Property(typ: identDef[^2])
       if property.kind == nnkPragmaExpr:
