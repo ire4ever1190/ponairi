@@ -350,16 +350,16 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: seq[string]):
     updateStmts: seq[string]
     excludes: seq[string]
   # Check all the excluded properties exist
-  for prop in excludeProps[0]:
+  for prop in excludeProps[1]:
     if not table.hasProperty(prop):
       fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
     excludes &= prop.strVal
-
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
     elif property.name notin excludes:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
+
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
