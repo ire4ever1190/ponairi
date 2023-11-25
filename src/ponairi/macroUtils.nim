@@ -62,8 +62,31 @@ proc getName*(n: NimNode): string =
     echo n.treeRepr
     assert false, "Name is invalid"
 
+proc getTableType*(n: NimNode): NimNode =
+  ## Tries to lookup object type for a variable.
+  ## This resolves things like ararys and sequences.
+  ## Returns nil if it couldn't find the type'
+  case n.kind
+  of nnkBracketExpr: n[^1].getTableType()
+  of nnkSym: n
+  else: nil
+
+proc contains*(props: seq[Property], prop: string): bool =
+  ## Checks if a property key exists in a list
+  ## of props.
+  # TODO: Why not create some kind of set and check against that?
+  # though I think the number of properties will be low enough
+  # that a list is faster
+  for p in props:
+    if p.name.eqIdent(prop):
+      return true
+
 proc getProperties*(impl: NimNode): seq[Property] =
-  for identDef in impl[2][2]:
+  var objectTy = impl[2]
+  # Need to remove the ref if its a ref type
+  if objectTy.kind == nnkRefTy:
+    objectTy = objectTy[0]
+  for identDef in objectTy[2]:
     for property in identDef[0 ..< ^2]:
       var newProp = Property(typ: identDef[^2])
       if property.kind == nnkPragmaExpr:

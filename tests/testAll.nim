@@ -52,6 +52,9 @@ let db = newConn(":memory:")
 
 test "Table creation":
   db.create(Person, Dog, Something, Model)
+# Perform creation anyways to make sure they are created for all tests
+db.create(Person, Dog, Something, Model)
+
 
 const
   jake = Person(name: "Jake", age: 42, status: Alive)
