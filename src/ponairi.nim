@@ -340,20 +340,14 @@ macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: seq[string]): SqlQuery =
-  ## Returns a string that can be used to insert or update an object into the database
+macro createUpsert[T: SomeTable](table: typedesc[T], excludes: static[seq[string]]): SqlQuery =
+  ## Returns a string that can be used to insert or update an object into the database.
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
   let properties = impl.getProperties()
   var
     conflicts: seq[string]
     updateStmts: seq[string]
-    excludes: seq[string]
-  # Check all the excluded properties exist
-  for prop in excludeProps[1]:
-    if not table.hasProperty(prop):
-      fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
-    excludes &= prop.strVal
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
@@ -362,6 +356,7 @@ macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: seq[string]):
 
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
+
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
@@ -406,8 +401,7 @@ proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray
 # We use a macro so we can get the items as nodes.
 # Means that we can properly assign compile time errors to them
 
-# Need to use untyped since macros currently have problems with matching openArray | T
-macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
+macro upsert*(db; item: typed, excludes: varargs[untyped]) =
   ##[
     Trys to insert an item (or items) into the database. If it conflicts with an
     existing item then it insteads updates the values to reflect item. If inserting a list of items
@@ -429,14 +423,19 @@ macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
 
     .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
   ]##
-  var excludedProps = nnkBracket.newTree()
+  # Check all the properties exist here while
+  # we still have line info
+  let table = item.getTypeInst().getTableType()
+  let props = table.lookupImpl().getProperties()
+
+  var excludedProps: seq[string]
   for prop in excludes:
     if prop.kind != nnkIdent:
       "Only properties can be excluded".error(prop)
-    # Since we can't lookup the implementation of T here we instead
-    # just build a list of props and then check if they exist later in createUpsert
-    excludedProps &= newLit prop.strVal
-  result = newCall(bindSym"upsertImpl", db, item, excludedProps)
+    if prop.strVal notin props:
+      fmt"{prop} doesn't exist in {table.getName()}".error(prop)
+    excludedProps &= prop.strVal
+  result = newCall(bindSym"upsertImpl", db, item, newLit excludedProps)
 
 proc create*[T: SomeTable](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
