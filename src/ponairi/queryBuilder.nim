@@ -1,4 +1,4 @@
-import ndb/sqlite except `?`
+import lowdb/sqlite except `?`
 import std/[
   macros,
   strformat,
