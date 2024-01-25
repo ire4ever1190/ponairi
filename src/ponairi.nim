@@ -4,7 +4,7 @@ import std/macrocache
 import std/strutils
 import std/options
 import std/times
-import ndb/sqlite except `?`
+import lowdb/sqlite except `?`
 
 import ponairi/[
   pragmas,
