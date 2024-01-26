@@ -126,6 +126,7 @@ func isPrimary*(prop: Property): bool =
   ## Returns true if the property is a primary key
   result = "primary" in prop.pragmas
 
+
 const properties = CacheTable"ponairi.properties"
 
 proc hasProperty*(obj: NimNode, property: string | NimNode): bool =

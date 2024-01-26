@@ -640,6 +640,27 @@ proc exists*[T: SomeTable](db; item: T): bool =
   ## Returns true if item already exists in the database
   queryWithWhere(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE :where LIMIT 1)", getValue[int64]).unsafeGet() == 1
 
+macro exists*[T: SomeTable](db; item: T, fields: varargs[untyped]): bool =
+  ## Like exists, except you can pass custom fields to check
+  var where: seq[string]
+  # Build expression using the passed fields as the where clause
+  for field in fields:
+    if field.kind != nnkIdent:
+      "Field must be an ident".error(field)
+    where &= field.strVal & " = ?"
+  let
+    whereExpr = where.join(" AND ")
+    name = getTypeInst(item).getName()
+    query = fmt"SELECT EXISTS (SELECT 1 FROM {name} WHERE {whereExpr} LIMIT 1)"
+    call = nnkBracketExpr.newTree(ident"getValue", ident"int64")
+  result = newCall(call, db, newCall(ident"sql", newLit(query)))
+  # Now add parameters from the passed item
+  for field in fields:
+    result &= newDotExpr(item, field)
+  # Add the comparison to make it a bool
+  let resultCall = newCall(nnkBracketExpr.newTree(ident"unsafeGet", ident"int64"), result)
+  result = nnkInfix.newTree(ident"==", resultCall, newLit 1)
+
 export hasCustomPragma # Wouldn't bind
 export replace
 export pragmas
