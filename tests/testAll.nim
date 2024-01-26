@@ -183,6 +183,21 @@ test "Exists without primary key":
   db.insert(item)
   check db.exists(item)
 
+test "Exists with custom fields":
+  type
+    Basic = object
+      a: string
+      b: int
+  db.create(Basic)
+  defer: db.drop(Basic)
+
+  let item = Basic(a: "foo", b: 9)
+  check not db.exists(item, b)
+  db.insert(Basic(a: "foo", b: 4))
+  check not db.exists(item, b)
+  check db.exists(item, a)
+
+
 # Allow find to work for next test
 proc `==`(b: (Dog, string), d: Dog): bool = d == b[0]
 
