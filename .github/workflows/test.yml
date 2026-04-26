@@ -24,18 +24,9 @@ jobs:
           version: ${{ matrix.nim }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Cache choosenim
-        id: cache-choosenim
-        uses: actions/cache@v5
-        with:
-          path: ~/.nimble
-          key: nimble-${{ hashFiles('*.nimble') }}
-
-      - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
-        name: Install nim dependencies
-        continue-on-error: true
-        run: nimble update && nimble install
+          
+      - name: Install nim dependencies
+        run: nimble install -y
 
       - name: Run Tests
         run: nimble test
@@ -53,9 +44,6 @@ jobs:
     if: github.ref == 'refs/heads/master'
     steps:
       - uses: actions/checkout@v6
-
-      - name: "Setup nim"
-        uses: jiro4989/setup-nim-action@v1
 
       - uses: iffy/install-nim@v5
         with:
