@@ -9,5 +9,5 @@ srcDir        = "src"
 
 # Dependencies
 
-requires "nim >= 1.6.0"
-requires "lowdb >= 0.1.1"
+requires "nim >= 2.2.0"
+requires "https://github.com/ire4ever1190/lowdb#fix/conditional-dependency"
