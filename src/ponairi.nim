@@ -7,7 +7,7 @@ import std/[
   times,
   tables
 ]
-import lowdb/sqlite
+import pkg/lowdb/sqlite
 
 import ponairi/[
   pragmas,

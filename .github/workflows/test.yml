@@ -20,9 +20,11 @@ jobs:
     - name: Setup Nim Enviroment
       uses: actions/checkout@v6
 
-    - uses: jiro4989/setup-nim-action@v1
+    - uses: iffy/install-nim@v5
       with:
-          nim-version: ${{ matrix.nim }}
+        version: ${{ matrix.nim }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Cache choosenim
       id: cache-choosenim
@@ -55,6 +57,12 @@ jobs:
 
       - name: "Setup nim"
         uses: jiro4989/setup-nim-action@v1
+
+      - uses: iffy/install-nim@v5
+        with:
+          version: stable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Build documentation"
         uses: ire4ever1190/nim-docs-action@v1
