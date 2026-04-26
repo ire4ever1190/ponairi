@@ -7,7 +7,8 @@ import std/[
   times,
   tables
 ]
-import pkg/lowdb/sqlite
+import pkg/lowdb/sqlite {.all.}
+import pkg/lowdb/wrappers/sqlite3
 
 import ponairi/[
   pragmas,
@@ -382,19 +383,16 @@ template countFields(x: typedesc, checker: untyped = true): int {.dirty.} =
         result += 1
   doCounting()
 
-template makeParams[T](item: T, checker: untyped = true): untyped {.dirty.} =
+template makeParams[T](item: T, checker: untyped = true): seq[DbValue] {.dirty.} =
   ## Converts an object into an array of `DBValue`. A checker can be passed
   ## to ignore certain fields.
   bind countFields
   bind fieldPairs
   const numFields = countFields(T, checker)
-  var
-    res: array[numFields, DbValue]
-    i = 0
+  var res = newSeqOfCap[DbValue](numFields)
   for name, field in fieldPairs(item):
     when checker:
-      res[i] = dbValue(field)
-      i += 1
+      res &= dbValue(field)
   res
 
 proc insert*[T: SomeTable](db; item: T) =
