@@ -2,7 +2,8 @@ import std/[
   unittest,
   options,
   strformat,
-  strutils
+  strutils,
+  times
 ]
 import ponairi
 
@@ -21,6 +22,7 @@ type
   Dog* = ref object
     name {.primary.}: string
     owner* {.references(Person.name), cascade.}: string
+    other: Option[DateTime]
 
   Something* = object
     name*, age*: string
@@ -32,6 +34,10 @@ type
     tag {.index: "extra_idx".}: string
     info {.index: "extra_idx".}: string
     extra {.uniqueIndex.}: string
+
+  Unrepeatable = object
+    id {.primary, autoIncrement.}: int
+    value {.uniqueIndex.}: int
 
 func `$`(d: Dog): string =
   if d != nil:
@@ -46,6 +52,9 @@ let db = newConn(":memory:")
 
 test "Table creation":
   db.create(Person, Dog, Something, Model)
+# Perform creation anyways to make sure they are created for all tests
+db.create(Person, Dog, Something, Model)
+
 
 const
   jake = Person(name: "Jake", age: 42, status: Alive)
@@ -174,6 +183,21 @@ test "Exists without primary key":
   db.insert(item)
   check db.exists(item)
 
+test "Exists with custom fields":
+  type
+    Basic = object
+      a: string
+      b: int
+  db.create(Basic)
+  defer: db.drop(Basic)
+
+  let item = Basic(a: "foo", b: 9)
+  check not db.exists(item, b)
+  db.insert(Basic(a: "foo", b: 4))
+  check not db.exists(item, b)
+  check db.exists(item, a)
+
+
 # Allow find to work for next test
 proc `==`(b: (Dog, string), d: Dog): bool = d == b[0]
 
@@ -214,5 +238,13 @@ suite "Index":
 
   test "Unique index can be used":
     check "SELECT * FROM Model WHERE extra = 'foo'".usesIndex("Model_index_unique_extra")
+
+  test "Unique constraint is applied on unique index":
+    db.create Unrepeatable
+    let u = Unrepeatable(value: 1)
+
+    discard db.insertID u
+    expect DbError:
+      discard db.insertID u
 
 close db

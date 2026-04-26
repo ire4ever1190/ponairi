@@ -333,7 +333,8 @@ macro createSchema(T: typedesc[SomeTable]): SqlQuery =
   result.join ");"
   # Add in the indexes
   for index, (unique, columns) in indexes:
-    result.join fmt"""CREATE INDEX IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
+    let indexType = (if unique: "UNIQUE" else: "") & " INDEX"
+    result.join fmt"""CREATE {indexType} IF NOT EXISTS {index} ON {tableName} ({columns.join(", ")});"""
   result = sqlLit(result)
 
 macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
@@ -355,28 +356,23 @@ macro createInsert[T: SomeTable](table: typedesc[T]): SqlQuery =
   result.join fmt"{columns}) VALUES ({variables})"
   result = sqlLit(result)
 
-macro createUpsert[T: SomeTable](table: typedesc[T], excludeProps: openArray[string]): SqlQuery =
-  ## Returns a string that can be used to insert or update an object into the database
+macro createUpsert[T: SomeTable](table: typedesc[T], excludes: static[seq[string]]): SqlQuery =
+  ## Returns a string that can be used to insert or update an object into the database.
   result = newCall("string", newCall(bindSym"createInsert", table))
   let impl = table.lookupImpl()
   let properties = impl.getProperties()
   var
     conflicts: seq[string]
     updateStmts: seq[string]
-    excludes: seq[string]
-  # Check all the excluded properties exist
-  for prop in excludeProps:
-    if not table.hasProperty(prop):
-      fmt"{prop} doesn't exist in {impl.getName()}".error(prop)
-    excludes &= prop.strVal
-
   for property in properties:
     if "primary" in property.pragmas:
       conflicts &= property.name
     elif property.name notin excludes:
       updateStmts &= fmt"{property.name}=excluded.{property.name}"
+
   if conflicts.len == 0:
     fmt"Upsert doesn't work on {impl.getName()} since it has no primary keys".error(table)
+
   result.join fmt""" ON CONFLICT ({conflicts.join(" ,")}) DO UPDATE SET {updateStmts.join(", ")}"""
   result = sqlLit(result)
 
@@ -477,8 +473,7 @@ proc upsertImpl[T: SomeTable](db; items: openArray[T], exclude: static[openArray
 # We use a macro so we can get the items as nodes.
 # Means that we can properly assign compile time errors to them
 
-# Need to use untyped since macros currently have problems with matching openArray | T
-macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
+macro upsert*(db; item: typed, excludes: varargs[untyped]) =
   ##[
     Trys to insert an item (or items) into the database. If it conflicts with an
     existing item then it insteads updates the values to reflect item. If inserting a list of items
@@ -500,14 +495,19 @@ macro upsert*(db; item: untyped, excludes: varargs[untyped]) =
 
     .. note:: This checks for conflicts on primary keys only and so won't work if your object has no primary keys
   ]##
-  var excludedProps = nnkBracket.newTree()
+  # Check all the properties exist here while
+  # we still have line info
+  let table = item.getTypeInst().getTableType()
+  let props = table.lookupImpl().getProperties()
+
+  var excludedProps: seq[string]
   for prop in excludes:
     if prop.kind != nnkIdent:
       "Only properties can be excluded".error(prop)
-    # Since we can't lookup the implementation of T here we instead
-    # just build a list of props and then check if they exist later in createUpsert
-    excludedProps &= newLit prop.strVal
-  result = newCall(bindSym"upsertImpl", db, item, excludedProps)
+    if prop.strVal notin props:
+      fmt"{prop} doesn't exist in {table.getName()}".error(prop)
+    excludedProps &= prop.strVal
+  result = newCall(bindSym"upsertImpl", db, item, newLit excludedProps)
 
 proc create*[T: SomeTable](db; table: typedesc[T]) =
   ## Creates a table in the database that reflects an object
@@ -543,7 +543,7 @@ proc drop*[T: object](db; table: typedesc[T]) =
 func to*(src: DbValue, dest: var string) {.inline.} = dest = src.s
 func to*[T: SomeOrdinal](src: DbValue, dest: var T) {.inline.} = dest = T(src.i)
 func to*[T: SomeFloat](src: DbValue, dest: var T) {.inline.} = dest = T(src.f)
-func to*[T](src: DbValue, dest: var Option[T]) =
+proc to*[T](src: DbValue, dest: var Option[T]) =
   if src.kind != dvkNull:
     when T is SomeTable:
       var val = T()
@@ -699,6 +699,27 @@ proc delete*[T: SomeTable](db; item: T) =
 proc exists*[T: SomeTable](db; item: T): bool =
   ## Returns true if item already exists in the database
   queryWithWhere(fmt"SELECT EXISTS (SELECT 1 FROM {$T} WHERE :where LIMIT 1)", getValue[int64]).unsafeGet() == 1
+
+macro exists*[T: SomeTable](db; item: T, fields: varargs[untyped]): bool =
+  ## Like exists, except you can pass custom fields to check
+  var where: seq[string]
+  # Build expression using the passed fields as the where clause
+  for field in fields:
+    if field.kind != nnkIdent:
+      "Field must be an ident".error(field)
+    where &= field.strVal & " = ?"
+  let
+    whereExpr = where.join(" AND ")
+    name = getTypeInst(item).getName()
+    query = fmt"SELECT EXISTS (SELECT 1 FROM {name} WHERE {whereExpr} LIMIT 1)"
+    call = nnkBracketExpr.newTree(ident"getValue", ident"int64")
+  result = newCall(call, db, newCall(ident"sql", newLit(query)))
+  # Now add parameters from the passed item
+  for field in fields:
+    result &= newDotExpr(item, field)
+  # Add the comparison to make it a bool
+  let resultCall = newCall(nnkBracketExpr.newTree(ident"unsafeGet", ident"int64"), result)
+  result = nnkInfix.newTree(ident"==", resultCall, newLit 1)
 
 export hasCustomPragma # Wouldn't bind
 export replace
