@@ -12,37 +12,36 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nim: ['2.0.0', 'stable', 'devel']
+        nim: ["2.2.0", "stable", "devel"]
 
     name: Nim ${{ matrix.nim }}
     steps:
+      - name: Setup Nim Enviroment
+        uses: actions/checkout@v6
 
-    - name: Setup Nim Enviroment
-      uses: actions/checkout@v6
+      - uses: iffy/install-nim@v5
+        with:
+          version: ${{ matrix.nim }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - uses: iffy/install-nim@v5
-      with:
-        version: ${{ matrix.nim }}
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Cache choosenim
+        id: cache-choosenim
+        uses: actions/cache@v5
+        with:
+          path: ~/.nimble
+          key: nimble-${{ hashFiles('*.nimble') }}
 
-    - name: Cache choosenim
-      id: cache-choosenim
-      uses: actions/cache@v5
-      with:
-        path: ~/.nimble
-        key: nimble-${{ hashFiles('*.nimble') }}
+      - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
+        name: Install nim dependencies
+        continue-on-error: true
+        run: nimble update && nimble install
 
-    - if: ${{ steps.cache-npm.outputs.cache-hit != 'true' }}
-      name: Install nim dependencies
-      continue-on-error: true
-      run: nimble update && nimble install
+      - name: Run Tests
+        run: nimble test
 
-    - name: Run Tests
-      run: nimble test
-
-    - name: Test doc examples
-      run: nimble doc --warningAsError:BrokenLink:on --project src/ponairi.nim
+      - name: Test doc examples
+        run: nimble doc --warningAsError:BrokenLink:on --project src/ponairi.nim
 
   deploy:
     name: Documentation
@@ -65,7 +64,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Build documentation"
-        uses: ire4ever1190/nim-docs-action@v1
+        uses: ire4ever1190/nim-docs-action@v2
         with:
           main-file: "src/ponairi.nim"
           deploy: "pages"
