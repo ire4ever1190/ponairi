@@ -7,12 +7,7 @@ import std/[
   times,
   tables
 ]
-
-import lowdb/sqlite {.all.}
-when (NimMajor, NimMinor) >= (1, 9):
-  from db_connector/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
-else:
-  from std/sqlite3 import SQLITE_OK, reset, PStmt, prepare_v2
+import pkg/lowdb/sqlite
 
 import ponairi/[
   pragmas,

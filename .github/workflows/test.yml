@@ -18,15 +18,17 @@ jobs:
     steps:
 
     - name: Setup Nim Enviroment
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
 
-    - uses: jiro4989/setup-nim-action@v1
+    - uses: iffy/install-nim@v5
       with:
-          nim-version: ${{ matrix.nim }}
+        version: ${{ matrix.nim }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Cache choosenim
       id: cache-choosenim
-      uses: actions/cache@v1
+      uses: actions/cache@v5
       with:
         path: ~/.nimble
         key: nimble-${{ hashFiles('*.nimble') }}
@@ -51,10 +53,16 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/master'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: "Setup nim"
         uses: jiro4989/setup-nim-action@v1
+
+      - uses: iffy/install-nim@v5
+        with:
+          version: stable
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: "Build documentation"
         uses: ire4ever1190/nim-docs-action@v1
