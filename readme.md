@@ -2,7 +2,7 @@
 
 Simple ORM to handle basic CRUD tasks. Future plans are to expand the query generation to make needing to write SQL less common
 
-[Docs here](https://ire4ever1190.github.io/ponairi/ponairi.html)
+[Docs here](https://ire4ever1190.github.io/ponairi/stable/ponairi.html)
 
 ### Create
 
@@ -88,4 +88,3 @@ assert db.exists(tableOrder)
 db.delete(tableOrder)
 assert not db.exists(tableOrder)
 ```
-

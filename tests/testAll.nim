@@ -5,7 +5,7 @@ import std/[
   strutils,
   times
 ]
-import ponairi {.all.}
+import ponairi
 
 type
   Status = enum
